@@ -1,0 +1,2557 @@
+//@version=5
+strategy("dcl-策略" , overlay = true ,max_boxes_count = 500 ,max_lines_count = 500 ,max_labels_count = 500 ,max_bars_back = 5000)
+//配置相关输入********************************************************
+//是否显示顶 底
+group0 = "显示设置" 
+//var isAuthor = input.bool(false,"相关问题咨询wx:fanjianqiang2007" ,group = group0)
+var isShowTopAndBottom          = input.bool(false  ,"显示所有顶底"     ,group = group0)
+var isShowTopBottom             = input.bool(false  ,"显示分型"         ,group = group0)
+var isShowRunningPen            = input.bool(true   ,"运行中的笔"       ,group = group0)
+var isShowMergeBar              = input.bool(false  ,"显示K线合并过程"  ,group = group0)
+var isFastToPen                 = input.bool(true   ,"急速成笔"         ,group = group0)
+var isPowerfulPeek              = input.bool(true   ,"强势分型绘制"     ,tooltip = "该选项会在k线图上将比较强势的分型进行绘制",group = group0)
+
+groupFeature = "特征序列设置"
+var isShowFeature               = input.bool(false,"显示特征序列" ,group = groupFeature)
+color p_Feature_Up              = input.color(color.rgb(8, 153, 129),"上涨线段颜色","定义上涨线段特征序列的颜色", inline = "feature", group = groupFeature)
+color p_Feature_Down            = input.color(color.red,"下跌线段颜色","定义下跌线段特征序列的颜色",inline = "feature",group = groupFeature)
+int p_Feature_Border            = input.int(2,"线条宽度", 1,6,group = groupFeature)
+
+//交易建议信息位置
+//var p_trade_suggest_position = input.string(position.top_right,"交易建议提示位置",options =  [position.top_right,position.top_left,position.bottom_right,position.bottom_left] ,group = group0)
+group1 = "分型、笔"
+int    p_max_cyc_bar            =  input.int(800,"最大k线",0,10000,500,group = group0,tooltip ="对k线分析数量进行限制,数量越少程序运行效率越高,一般设置3000足够了,太旧之前的行情对我们来说也没有太大意义！0:不限制")
+//笔类型
+var p_isShowPen                 = input.bool(true,"显示笔",inline = "penshow",group = group1)
+penTypeStr                      = input.string("老笔",title="笔的类型" ,options = ["老笔","新笔","4K","严笔"],inline = "pen",group = group1,tooltip = "笔的类型说明\n严笔:经过包含处理后，一笔至少有5根K线,并且要求中间k线符合笔的方向\n老笔:经过包含处理后，一笔至少有5根K线\n新笔:一笔至少包含4根经过包含处理后的K线，同时新笔一笔中至少包含5根未处理包含关系的K线 \n4k:包含处理后单独4根就可成笔\n")
+var oldPenMode                  = input.bool(true,"允许分型重叠",inline = "pen",group = group1)
+// //一顶一底(一笔力度比较大的时候)
+// var specialTopBottom = input.bool(true,"一顶一底")
+//顶底幅度>=指定值允许成笔
+
+//笔的颜色
+
+color  penColr                  = input.color(color.rgb(54, 58, 69, 15),"笔的颜色","定义笔的颜色",inline = "group_pen_param",group = group1)
+int    penWidth                 =  input.int(1,"笔的线宽",1,10,inline = "group_pen_param",group = group1)
+float  p_penToSegmentRadio      =  input.float(0,"单笔成段",0,1000,tooltip = "后一笔/前一线段达到此数值并且之前线段没有缺口允许成线段(1倍填写 100)\n0:不使用此效果",group = group1)
+p_TopAndBottom_Ratio            = input.float(0,"顶底成笔",0,1000,tooltip="当顶底力度比较大时虽然从合并后k线看不足构成一笔的数量,但振幅达到上一笔指定比例(1倍填写 100)允许成笔\n 0:不使用此功能",group = group1)
+
+var penType = (penTypeStr =="老笔") ? 5 : (penTypeStr =="严笔") ? 5 : (penTypeStr =="新笔") ? -4 : (penTypeStr =="4K") ? 4 : 0
+
+
+
+groupSegment = "线段"
+var p_isShowSegment                         = input.bool(true,"显示线段",group = groupSegment)
+var p_isShowBigSegment                      = input.bool(true,"显示趋势线",group = groupSegment)
+var p_segment_type_str                      = input.string("严格模式","线段模式",options = ["当下延伸后修正","严格模式","延伸模式"])
+var p_segmentType                           = (p_segment_type_str == "延伸模式") ? 2 : (p_segment_type_str == "当下延伸后修正") ? 3 : 1
+
+color segmentColor                          = input.color(color.rgb(33, 149, 243, 30),"线段颜色(本级别)","定义线段的颜色",inline = "segment",group = groupSegment)
+int   segmentWidth                          =  input.int(1,"线宽",1,10,inline = "segment",group =groupSegment)
+color parentSegmentColr                     = input.color(color.rgb(76, 175, 79, 30),"线段颜色(大级别)","定义大级别线段的颜色",inline = "parentegment",group = groupSegment)
+int   parentSegmentWidth                    =  input.int(1,"大级别线段线宽",1,10,inline = "parentegment",group =groupSegment)
+p_Segment_Change_Ratio                      = input.float(-1,"线段修正比例",tooltip="-1:不使用此功能",options = [38.2,50,61.8,78.6,-1],group = groupSegment)
+group_pivot = "中枢"
+bool  p_showPenPivot                        = input.bool(true,"是否显示次级别中枢",group = group_pivot)
+bool p_showPivot                            = input.bool(true,"是否显示本级别中枢",group = group_pivot)
+bool p_isBeforeDrawPivot                    = input.bool(true,"提前绘制笔中枢",group = group0,tooltip = "提前绘制中枢可以快速帮助我们观察短期压力和支撑")
+bool p_isBeforeDrawCurrentPivot             = input.bool(false,"提前绘制中枢",group = group0,tooltip = "提前绘制中枢可以快速帮助我们观察短期压力和支撑")
+
+color penPivotUpBgColor                     = input.color(color.rgb(49, 121, 245, 90),"上涨中枢(次级别)","定义笔中枢的颜色",inline = "pen_pivot_up",group = group_pivot)
+color penPivotUpBorderColor                 = input.color(color.rgb(49, 121, 245, 0),"上涨笔中枢边框","定义笔中枢的边框颜色",inline = "pen_pivot_up",group = group_pivot)
+color penPivotDownBgColor                   = input.color(color.rgb(49, 121, 245, 90),"下跌中枢(次级别)","定义笔中枢的颜色",inline = "pen_pivot_down",group = group_pivot)
+color penPivotDownBorderColor               = input.color(color.rgb(49, 121, 245, 0),"下跌笔中枢边框","定义笔中枢的边框颜色",inline = "pen_pivot_down",group = group_pivot)
+//9笔延伸为本级别
+color penExtendPivotUpBgColor               = input.color(color.rgb(255,152, 82, 80),"上涨中枢(次级别延伸为本级别)","定义笔中枢的颜色",  inline = "pen_pivot_up_extend",group = group_pivot)
+color penExtendPivotUpBorderColor           = input.color( color.rgb(255,152, 82, 0),"上涨笔中枢边框","定义笔中枢的边框颜色",        inline = "pen_pivot_up_extend",group = group_pivot)
+color penExtendPivotDownBgColor             = input.color(color.rgb(255,152, 82, 80),"下跌中枢(次级别延伸为本级别)","定义笔中枢的颜色",inline = "pen_pivot_downp_extend",group = group_pivot)
+color penExtendPivotDownBorderColor         = input.color(color.rgb(255,152, 82, 0),"下跌笔中枢边框","定义笔中枢的边框颜色",      inline = "pen_pivot_downp_extend",group = group_pivot)
+
+
+//本级别中枢设置
+color pivotUpBgColor                        = input.color(color.rgb(255, 200, 82, 80),"上涨中枢(本级别)","定义中枢的颜色",inline = "pivot_up",group = group_pivot)
+color pivotUpBorderColor                    = input.color( color.rgb(255, 200, 82),"上涨中枢边框","定义中枢的边框颜色",inline = "pivot_up",group = group_pivot)
+color pivotDownBgColor                      = input.color(color.rgb(255, 200, 82, 80),"下跌中枢(本级别)","定义中枢的颜色",inline = "pivot_down",group = group_pivot)
+color pivotDownBorderColor                  = input.color(color.rgb(255, 200, 82,0),"下跌中枢边框","定义笔中枢的边框颜色",inline = "pivot_down",group = group_pivot)
+
+//买卖点
+group_operatePoint = "买卖点"
+bool p_showPenOperate                       = input.bool(true,"次级别买卖点",group = group_operatePoint)
+bool p_showOperate                          = input.bool(true,"本级别买卖点",group = group_operatePoint)
+string p_buyOrSellType                      = input.string("纯数字显示","买卖点展现形式",options = ["标签显示","纯数字显示"],tooltip  = "买卖点展现形式，根据自己需要进行选择",group = group_operatePoint)
+//买卖点标签颜色
+color p_penBuyColor                         = input.color(color.rgb(76, 175, 79, 30),"次级别买点标签颜色",inline = "pen_buy_color",group = group_operatePoint)
+color p_penNumberBuyColor                   = input.color(color.rgb(8, 153, 129, 10),"次级别买点数字颜色",inline = "pen_buy_color",group = group_operatePoint)
+//买卖点数字标识颜色
+color p_penSellColor                        = input.color( color.rgb(255, 82, 82, 30),"次级别卖点标签颜色",inline = "pen_sell_color",group = group_operatePoint)
+color p_penNumberSellColor                  = input.color(color.rgb(242, 54, 54, 10),"次级别卖点数字颜色",inline = "pen_sell_color",group = group_operatePoint)
+
+//大级别买卖点标签颜色
+color p_buyColor                            = input.color(color.rgb(33, 149, 243, 30),"本级别买点标签颜色",inline = "buy_color",group = group_operatePoint)
+color p_buyNumberColor                      = input.color(color.rgb(8, 153, 129, 10),"本级别买点数字颜色",inline = "buy_color",group = group_operatePoint)
+
+//大级别买卖点数字标识颜色
+color p_sellColor                           = input.color(color.rgb(231, 216, 82, 30),"本级别卖点标签颜色",inline = "sell_color",group = group_operatePoint)
+color p_sellNumberColor                     = input.color(color.rgb(242, 54, 54, 10),"本级别卖点颜色",inline = "sell_color",group = group_operatePoint)
+
+//背驰
+group_bc = "macd背驰"
+bool p_ShowBC_low                           = input.bool(false,"显示次级别背驰",group = group_bc)
+bool p_ShowBC                               = input.bool(false,"显示本级别背驰",group = group_bc)
+color pMacdLineColor1                       = input.color(color.yellow,"背驰段背驰颜色",inline = "group_bc",group = group_bc)
+color pMacdLineColor2                       = input.color(color.red,"背驰颜色",inline = "group_bc",group = group_bc)
+color pMacdLineColor3                       = input.color(color.maroon,"背驰及背驰段背驰颜色",inline = "group_bc",group = group_bc)
+int pMacdLineWidth                          = input.int(1,"背驰线宽",1,10,inline = "group_bc_line",group = group_bc)
+
+
+bool p_operatePoint_filter_part             = input.bool(false,"买卖点分型过滤",group = "买卖点过滤")
+bool p_operatePoint_filter_part_base        = input.bool(false,"买卖点分型基础过滤",group = "买卖点过滤")
+bool p_operatePoint_filter_one_operate      = input.bool(false,"1买卖macd背驰过滤",group = "买卖点过滤")
+bool p_operatePoint_filter_two_operate      = input.bool(false,"2买卖点过滤",group = "买卖点过滤",tooltip = "只显示2买macd在0轴上方并且回调接近0轴的")
+bool p_operatePoint_filter_power            = input.bool(false,"防狼术",group = "买卖点过滤")
+show_ma1                                    = input(false   , "MA1", group = "均线系统设置", inline="MA #1")
+ma1_type                                    = input.string("SMA"  , ""   , group = "均线系统设置", inline="MA #1", options=["SMA", "EMA"])
+ma1_source                                  = input(close  , ""     , group = "均线系统设置", inline="MA #1")
+ma1_length                                  = input.int(5     , ""     , group = "均线系统设置", inline="MA #1", minval=1)
+ma1__width                                =  input.int(1,"线宽",1,10, group = "均线系统设置", inline="MA #1")
+ma1_color                                   = input(#f6c309, ""     , group = "均线系统设置", inline="MA #1")
+                                        
+show_ma2                                    = input(false   , "MA2", group = "均线系统设置", inline="MA #2")
+ma2_type                                    = input.string("SMA"  , ""     , group = "均线系统设置", inline="MA #2", options=["SMA", "EMA"])
+ma2_source                                  = input(close  , ""     , group = "均线系统设置", inline="MA #2")
+ma2_length                                  = input.int(13     , ""     , group = "均线系统设置", inline="MA #2", minval=1)
+ma2__width                                =  input.int(1,"线宽",1,10, group = "均线系统设置", inline="MA #2")
+ma2_color                                   = input(#fb9800, ""     , group = "均线系统设置", inline="MA #2")
+                                        
+show_ma3                                    = input(false   , "MA3", group = "均线系统设置", inline="MA #3")
+ma3_type                                    = input.string("SMA"  , ""     , group = "均线系统设置", inline="MA #3", options=["SMA", "EMA"])
+ma3_source                                  = input(close  , ""     , group = "均线系统设置", inline="MA #3")
+ma3_length                                  = input.int(21    , ""     , group = "均线系统设置", inline="MA #3", minval=1)
+ma3__width                                =  input.int(1,"线宽",1,10, group = "均线系统设置", inline="MA #3")
+ma3_color                                   = input(#fb6500, ""     , group = "均线系统设置", inline="MA #3")
+                                        
+show_ma4                                    = input(false   , "MA4", group = "均线系统设置", inline="MA #4")
+ma4_type                                    = input.string("SMA"  , ""     , group = "均线系统设置", inline="MA #4", options=["SMA", "EMA"])
+ma4_source                                  = input(close  , ""     , group = "均线系统设置", inline="MA #4")
+ma4_length                                  = input.int(34    , ""     , group = "均线系统设置", inline="MA #4", minval=1)
+ma4__width                                =  input.int(1,"线宽",1,10, group = "均线系统设置", inline="MA #4")
+ma4_color                                   = input(#f60c0c, ""     , group = "均线系统设置", inline="MA #4")
+                                        
+                                        
+show_ma5                                    = input(false   , "MA5", group = "均线系统设置", inline="MA #5")
+ma5_type                                    = input.string("SMA"  , ""     , group = "均线系统设置", inline="MA #5", options=["SMA", "EMA"])
+ma5_source                                  = input(close  , ""     , group = "均线系统设置", inline="MA #5")
+ma5_length                                  = input.int(55    , ""     , group = "均线系统设置", inline="MA #5", minval=1)
+ma5__width                                =  input.int(1,"线宽",1,10, group = "均线系统设置", inline="MA #5")
+ma5_color                                   = input(color.rgb(251, 153, 153), ""     , group = "均线系统设置", inline="MA #5")
+                                        
+                                        
+show_ma6                                    = input(false   , "ma6", group = "均线系统设置", inline="MA #6")
+ma6_type                                    = input.string("SMA"  , ""     , group = "均线系统设置", inline="MA #6", options=["SMA", "EMA"])
+ma6_source                                  = input(close  , ""     , group = "均线系统设置", inline="MA #6")
+ma6_length                                  = input.int(89    , ""     , group = "均线系统设置", inline="MA #6", minval=1)
+ma6__width                                =  input.int(1,"线宽",1,10, group = "均线系统设置", inline="MA #6")
+ma6_color                                   = input(color.rgb(0, 241, 242), ""     , group = "均线系统设置", inline="MA #6")
+                                        
+show_ma7                                    = input(false   , "ma7", group = "均线系统设置", inline="MA #7")
+ma7_type                                    = input.string("SMA"  , ""     , group = "均线系统设置", inline="MA #7", options=["SMA", "EMA"])
+ma7_source                                  = input(close  , ""     , group = "均线系统设置", inline="MA #7")
+ma7_length                                  = input.int(144    , ""     , group = "均线系统设置", inline="MA #7", minval=1)
+ma7__width                                =  input.int(1,"线宽",1,10, group = "均线系统设置", inline="MA #7")
+ma7_color                                   = input(color.rgb(237, 103, 0), ""     , group = "均线系统设置", inline="MA #7")
+                                        
+show_ma8                                    = input(false   , "ma8", group = "均线系统设置", inline="MA #8")
+ma8_type                                    = input.string("SMA"  , ""     , group = "均线系统设置", inline="MA #8", options=["SMA", "EMA"])
+ma8_source                                  = input(close  , ""     , group = "均线系统设置", inline="MA #8")
+ma8_length                                  = input.int(233    , ""     , group = "均线系统设置", inline="MA #8", minval=1)
+ma8__width                                =  input.int(1,"线宽",1,10, group = "均线系统设置", inline="MA #8")
+ma8_color                                   = input(color.rgb(40, 36, 36), ""     , group = "均线系统设置", inline="MA #8")
+
+
+group_strategy = "策略相关设置"
+group_strategy_one = "策略相关设置"
+bool    p_follow_trend =                    input.bool(false,"跟随线段",group = group_strategy)
+bool    p_strategy_one =                    input.bool(false,"参与1买卖点",group = group_strategy_one)
+bool    p_strategy_one_privot =             input.bool(false,"1买卖点至少要求一中枢后或5笔",group = group_strategy_one)
+bool    p_strategy_two =                    input.bool(false,"参与2买卖点",group = group_strategy)
+bool    p_strategy_two_privot =             input.bool(false,"2买卖点要求至少一中枢并且没有出现对此中枢的三买卖",group = group_strategy)
+bool    p_strategy_two_lei =                input.bool(false,"参与类2买卖点",group = group_strategy)
+bool    p_strategy_three =                  input.bool(false,"参与3买卖点",group = group_strategy)
+
+
+
+
+string compareSysmbol = input.symbol("btc",title = "比价系统")
+//Debug测试调试工具
+type DebugInfo
+    string debugInfo
+    int    debugnum = 0
+DebugInfo debugInfo = DebugInfo.new()
+print(txt) =>
+    lbl = label.new(bar_index, na, txt,tooltip = txt,xloc= xloc.bar_index, yloc= yloc.price,color= color(na))
+    label.set_xy(lbl, bar_index, high)
+    label.set_text(lbl, txt)
+    debugInfo.debugInfo := ""
+ma(source, length, type) =>
+    (type == "SMA") ? ta.sma(source, length) : ta.ema(source, length)
+//#regioin 对象定义
+type OperatePoint
+    //买卖点类型 -1:卖点 1:买点
+    int operateType
+    //1,2,3买卖点数字
+    int typeNum
+    //买卖点价格
+    float price
+    //买卖点描述(次级别+大级别)
+    string operateInfo
+    //对应图形
+    label operateLabel
+
+//@type 笔定义***************************************************
+//@field high 笔的高点
+//@field low 笔的低点
+//@field penState 笔的状态 0:成笔但未完成 1:已完成 2:待成笔
+type Pen
+    float high
+    float low
+    int startTime = 0
+    //结束时间
+    int endTime = 0
+    //笔的状态 1:进行中的笔(没有第三笔确定就是此状态) 2:已经完成的笔
+    int penState = 0 
+    //笔方向  1:上升 -1:下跌
+    int direction = 0
+    //绘制的线
+    line line
+    //该笔对应的买卖点
+    OperatePoint operatePoint
+    //是否内部背驰 例:如果向下笔 最低点 macd不是最小的即为背驰
+    float[] area
+    //对应macd面积
+    float macdArea
+//@type 中枢定义 *************************************************** 
+type Pivot
+    float high
+    float low
+    //开始时间(使用时间避免 barindex 跨度过大问题)
+    int startTime = 0
+    //结束时间
+    int endTime = 0
+    //开始笔index
+    int startPenIndex = 0
+    //结束笔index
+    int endPenIndex = 0
+    //中枢方向 1:上涨中枢 -1:下跌中枢
+    int direction = 0
+    //中枢状态 1:进行中 2:完成
+    int state = 1
+    //box
+    box box = na
+    //提前绘制后保留之前时间
+    int oldEndTime = 0
+//@type 线段定义***********************************************
+type Segment
+    float high
+    float low
+    //开始时间(使用时间避免 barindex 跨度过大问题)
+    int startTime = 0
+    //结束时间
+    int endTime = 0
+    //开始笔index
+    int startPenIndex = 0
+    //结束笔index
+    int endPenIndex = 0
+    //线段的状态 1:待确定 2:已确认
+    int segmentState = 0 
+    //方向  1:上升 -1:下跌
+    int direction = 0
+    //绘制的线
+    line line
+    //包含的中枢
+    array<Pivot> pivots
+    //对应模拟笔对象
+    Pen pen = na
+    //特征序列对应的线条信息
+    line[] featureLine
+//级别定义
+type Grade
+    //1:当前级别 2:上一个级别
+    int gradeNum = 1
+    //对应的自身笔
+    Pen[] selfPens
+    //对应的线段模拟笔
+    Pen[] pens
+    //对应线段颜色和类型
+    color segmentLineColor
+    int   segmentWidth
+    //线段完成样式
+    string segmentLineNoOverStyle = line.style_dashed
+    //线段完成样式
+    string segmentLineOverStyle = line.style_solid
+    //对应中枢背景颜色和边框信息
+    color pivotUpBgColor
+    color pivotDownBgColor
+    color pivotUpBorderColor
+    color pivotDownBordeColor
+    //对应线段信息
+    Segment[] segments
+    //对应可能线段信息
+    Segment[] ableSegments
+    //买卖点颜色
+    color buyColor
+    color sellColor
+    color buyNumberColor
+    color sellNumberColor
+    //是否显示买卖点
+    bool isShowOperate
+    //内部背驰线
+    line innerBCLine
+    float innerBCArea
+    //背驰线
+    line bCLine
+    float bCArea
+    //是否显示线段
+    bool isShowLine
+    //提前绘制中枢
+    box pivotBeforeDrawBox
+//分型事件定义
+type PeekEvent
+    // 1:顶 -1:底
+    int     isTopOrBottom
+    float   topOrBottomPrice
+    int     topOrBottomTime
+    int     peekBarIndex
+//#endregion
+//买卖点显示 1:标签显示 2:纯数字显示
+var buyOrSellType = (p_buyOrSellType == "纯数字显示") ? 2 : 1
+//合并后的 high low
+var float[] mergeHigh = array.new_float(0)
+var float[] mergeLow  = array.new_float(0)
+var int[]   mergeTime = array.new_int(0)
+var int[]   mergeBarIndex = array.new_int(0)
+var int[]   peakIndexs = array.new_int(0)
+//保存所有笔对象
+var array<Pen> pens = array.new<Pen>(0)
+//将本级别段模拟成笔存放在此处
+var array<Pen> segmentPens = array.new<Pen>(0)
+//可能成笔的(只有一个)
+var array<Pen> ablePen = array.new<Pen>(0)
+
+//保存所有级别信息
+//此处本身定义为var 但发现该编程语言在对象引用有问题故此去掉
+var Grade[] grades = array.new<Grade>(0)
+//保存当前级别所有的线段信息
+var Segment[] segments = array.new<Segment>(0)
+//之前已经成为线段，但因为后续发展导致该线段失效，放入此中后续判断
+var Segment[] ableSegments = array.new<Segment>(0)
+//保存当高级别所有的线段信息
+var Segment[] hightSegments = array.new<Segment>(0)
+//之前已经成为线段，但因为后续发展导致该线段失效，放入此中后续判断
+var Segment[] highAbleSegments = array.new<Segment>(0)
+//行进中的笔,未确定，只供显示使用
+var Pen runningPen = Pen.new(na,na,na,na,1,0,line.new(0,0,0,0,xloc = xloc.bar_time,style = line.style_dotted,color=penColr,width=1))
+//买卖点报警标记设置 (1:买 -1:卖)
+float[] alertSubFlag = array.new_float() //次级别
+float[] alertFlag = array.new_float()//本级别
+//显示的顶底分型(只保留最后20条)
+var label[] topOrBottomLabels = array.new_label(0)
+//var table suggestInfo = table.new(p_trade_suggest_position, 1, 4)
+//macd参数信息
+[macdLine, signalLine, histLine] = ta.macd(close,12,26,9)
+var float[] macdHist = array.new_float()
+//事件发布订阅(便于免于调整代码顺序)************
+var PeekEvent[] peekEvents = array.new<PeekEvent>(na)
+var float[] trendEvents = array.new<float>(na)
+setTopBottomLabel(Pen _pen,int _x,float _price,int _direction)=>
+    if(isShowTopBottom)
+        tooltip = str.tostring(_price)+"\nArea:"+str.tostring(_pen.macdArea)
+        label _label =  label.new(na,na,xloc = xloc.bar_time,yloc = yloc.price,size=size.auto)
+        if(_direction == -1)
+            label.set_x(_label,_x)
+            //label.set_y(_label,_price-_price*0.01)
+            label.set_yloc(_label,yloc.belowbar)
+            label.set_color(_label,color.green)
+            label.set_style(_label,label.style_triangleup)
+            label.set_tooltip(_label,tooltip)
+        else
+            label.set_x(_label,_x)
+            //label.set_y(_label,_price+_price*0.01)
+            label.set_yloc(_label,yloc.abovebar)
+            label.set_color(_label,color.red)
+            label.set_style(_label,label.style_triangledown)
+            label.set_tooltip(_label,tooltip)
+        array.push(topOrBottomLabels,_label)
+        int _labelNum = array.size(topOrBottomLabels)
+        while(_labelNum>=30)
+            label.delete(array.shift(topOrBottomLabels))
+            _labelNum := array.size(topOrBottomLabels)
+//报警初始化设置
+initAlertFlag()=>
+    //第0位保存笔起始价格，用于判定对应笔信息
+    array.push(alertSubFlag,0)
+    //次级别1买卖
+    array.push(alertSubFlag,0)
+    //次级别2买卖
+    array.push(alertSubFlag,0)
+    //次级别3买卖
+    array.push(alertSubFlag,0)
+    //次级别类2买卖
+    array.push(alertSubFlag,0)
+    //第0位保存笔起始价格，用于判定对应笔信息
+    array.push(alertFlag,0)
+    //本级别1买卖
+    array.push(alertFlag,0)
+    //本级别2买卖
+    array.push(alertFlag,0)
+    //本级别3买卖
+    array.push(alertFlag,0)
+    //本级别类2买卖
+    array.push(alertFlag,0)
+setAlertFlag(int _gradeNum,OperatePoint _operatePoint)=>
+    float _price = _operatePoint.price
+    int _alertIndex = _operatePoint.typeNum
+    if(_operatePoint.typeNum == -2)
+        _alertIndex  := 4
+        //print("******")
+    //设置报警标志
+    if(_gradeNum == 1)
+        array.set(alertSubFlag,_alertIndex,_operatePoint.operateType==1?_price:-_price)
+    else
+        array.set(alertFlag,_alertIndex,_operatePoint.operateType==1?_price:-_price)
+//系统启动是首次初始化级别信息
+initGrade() =>
+    if(array.size(grades)<=0)
+        //初始化低级别信息(无用)
+        Grade preGrade = Grade.new(0,segmentPens,pens,segmentColor,segmentWidth,line.style_dashed,line.style_solid,
+                 penPivotUpBgColor,penPivotDownBgColor,penPivotUpBorderColor,penPivotDownBorderColor,segments,ableSegments)
+        preGrade.buyColor:= p_penBuyColor
+        preGrade.sellColor:= p_penSellColor
+        preGrade.isShowOperate :=p_showPenOperate
+        //初始化本级别信息
+        Grade currentGrade = Grade.new(1,segmentPens,pens,segmentColor,segmentWidth,line.style_dotted,line.style_solid,
+                 penPivotUpBgColor,penPivotDownBgColor,penPivotUpBorderColor,penPivotDownBorderColor,segments,ableSegments)
+        //标签颜色
+        currentGrade.buyColor:= p_penBuyColor
+        currentGrade.sellColor:= p_penSellColor
+        //数字颜色
+        currentGrade.buyNumberColor:= p_penNumberBuyColor
+        currentGrade.sellNumberColor:= p_penNumberSellColor
+        currentGrade.isShowOperate :=p_showPenOperate
+        currentGrade.innerBCLine := line.new(na,na,na,na,xloc = xloc.bar_time,color = color.yellow,style = line.style_solid,width = 100)
+        currentGrade.bCLine := line.new(na,na,na,na,xloc = xloc.bar_time,color = color.red,style = line.style_solid,width = 100)
+        currentGrade.isShowLine := p_isShowSegment
+        currentGrade.pivotBeforeDrawBox := box.new(na,na,na,na,xloc = xloc.bar_time,border_style = line.style_dotted)
+
+        //初始化上一级别信息
+        Grade nextGrade = Grade.new(2,array.new<Pen>(),segmentPens,parentSegmentColr,parentSegmentWidth,line.style_dotted,line.style_dashed,
+                 pivotUpBgColor,pivotDownBgColor,pivotUpBorderColor,pivotDownBorderColor,hightSegments,highAbleSegments)
+        nextGrade.buyColor:= p_buyColor
+        nextGrade.sellColor:= p_sellColor
+        nextGrade.buyNumberColor:= p_buyNumberColor
+        nextGrade.sellNumberColor:= p_sellNumberColor
+        nextGrade.isShowOperate :=p_showOperate
+        nextGrade.innerBCLine := line.new(na,na,na,na,xloc = xloc.bar_time,color = color.yellow,style = line.style_solid,width = 100)
+        nextGrade.bCLine := line.new(na,na,na,na,xloc = xloc.bar_time,color = color.red,style = line.style_solid,width = 100)
+        nextGrade.isShowLine := p_isShowBigSegment
+        nextGrade.pivotBeforeDrawBox := box.new(na,na,na,na,xloc = xloc.bar_time,border_style = line.style_dotted)
+        array.insert(grades,0,preGrade)
+        array.insert(grades,1,currentGrade)
+        array.insert(grades,2,nextGrade)
+getGradePens(int _gradeNum)=>
+    (_gradeNum == 1) ? pens : segmentPens
+getGradeSelfPens(int _gradeNum)=>
+    (_gradeNum == 1) ? segmentPens : array.new<Pen>()
+getGradeSegments(int _gradeNum)=>
+    (_gradeNum == 1) ?segments:hightSegments
+getGradeAbleSegments(int _gradeNum)=>
+    (_gradeNum == 1) ? ableSegments : highAbleSegments
+          
+clearFeature(Segment _segment)=>
+    if(not na(_segment.featureLine) and array.size(_segment.featureLine)>0)
+        for i = 0 to array.size(_segment.featureLine)-1
+            line.delete(array.get(_segment.featureLine,i))
+        _segment.featureLine := array.new<line>()
+drawSingleFeature(int _gradeNum,Segment _segment)=>
+    Pen[] _pens= getGradePens(_gradeNum)
+    Segment[] _segments = getGradeSegments(_gradeNum)
+    //debugInfo.debugInfo := ""
+    //从起始合并到顶点
+    for i = _segment.startPenIndex to array.size(_pens) - 1
+        Pen _pen = array.get(_pens,i)
+        if(_pen.direction == _segment.direction)
+            continue
+        //取得最后的特征k线
+        line _lastLine = na
+        if( array.size(_segment.featureLine) > 0  )
+            _lastLine := array.last(_segment.featureLine)
+
+        if(na(_lastLine))
+            line _templine = line.new(na,na,na,na,xloc = xloc.bar_time,color = _segment.direction==1?p_Feature_Up:p_Feature_Down,style = line.style_arrow_right,width = p_Feature_Border)
+            array.push(_segment.featureLine,_templine)
+            line.set_xy1(_templine,_pen.startTime,_pen.direction == 1?_pen.low:_pen.high)
+            line.set_xy2(_templine,_pen.endTime,_pen.direction == 1?_pen.high:_pen.low)
+            //debugInfo.debugInfo += "\n:-----------------0:"+str.tostring(_pen.high)+":"+str.tostring(_pen.low)
+        else
+            //判断当前特征k线是否和之前特征k线存在包含关系
+            bool _hasContains = false
+            if(_pen.direction == 1 and  line.get_y1(_lastLine) <= _pen.low and line.get_y2(_lastLine) >= _pen.high )//向上
+                _hasContains := true
+            if(_pen.direction == -1 and line.get_y1(_lastLine) >= _pen.high and line.get_y2(_lastLine) <= _pen.low )//向下
+                _hasContains := true
+            // if(_hasContains and array.indexof(_pens,_pen) == _segment.endPenIndex+1)
+            //     _hasContains := false  
+            if(_hasContains)
+                //debugInfo.debugInfo += "\n:-----------------1:"+str.tostring(_pen.high)+":"+str.tostring(_pen.low)
+                if(_pen.direction==1 and _pen.high <= line.get_y2(_lastLine))
+                    line.set_xy2(_lastLine,_pen.endTime,_pen.high)
+                if(_pen.direction==-1 and _pen.low >= line.get_y2(_lastLine))
+                    line.set_xy2(_lastLine,_pen.endTime,_pen.low)
+            else
+                //debugInfo.debugInfo += "\n*********************************************2:"+str.tostring(_pen.high)+":"+str.tostring(_pen.low)
+                line _templine = line.new(na,na,na,na,xloc = xloc.bar_time,color = _segment.direction==1?p_Feature_Up:p_Feature_Down,style = line.style_arrow_right,width = p_Feature_Border)
+                line.set_xy1(_templine,_pen.startTime,_pen.direction == 1?_pen.low:_pen.high)
+                line.set_xy2(_templine,_pen.endTime,_pen.direction == 1?_pen.high:_pen.low)
+                array.push(_segment.featureLine,_templine)
+                if(array.size(_segment.featureLine)>=2 and i > _segment.endPenIndex + 1)
+                    line _preLine = array.get(_segment.featureLine,array.size(_segment.featureLine)-2)
+                    //如果出现特征分型直接跳出循环
+                    if(_segment.direction ==  1 and _pen.low < line.get_y2(_lastLine) )
+                        break
+                    else if(_segment.direction ==  -1 and _pen.high > line.get_y2(_lastLine) )
+                        break
+            if(array.indexof(_pens,_pen) == _segment.endPenIndex+1 and array.size(_segment.featureLine) >= 3)
+                for j = 0 to array.size(_segment.featureLine) - 3
+                    line.delete(array.get(_segment.featureLine,j))
+
+
+
+
+    // if(array.indexof(_segments,_segment) == 0)
+    //     debugInfo.debugInfo += "\n  _segment.startPenIndex:"+str.tostring( _segment.startPenIndex)+"\n size:"+str.tostring(array.size(_pens))+"\nline:"+str.tostring(array.size(_segment.featureLine))
+    //     //print(debugInfo.debugInfo)
+//给指定线段绘制特征序列信息(当前只显示笔)
+drawFeature(int _gradeNum)=>
+    Pen[] _pens= getGradePens(_gradeNum)
+    Segment[] _segments = getGradeSegments(_gradeNum)
+    if(array.size(_segments)>0 and isShowFeature)
+        for i = (array.size(_segments) - 5 >= 0 ? array.size(_segments) - 5 : 0) to  array.size(_segments)- 1 
+            Segment _segment = array.get(_segments , i )
+            clearFeature(_segment)
+            if( array.size(_segments) - 3 <= array.indexof(_segments,_segment)  )
+                drawSingleFeature(_gradeNum,_segment)
+        // int i = 4
+        // while(i >= 0)
+        //     if(array.size(_segments) >= i )
+        //         Segment _segment = array.get(_segments,array.size(_segments) - i  )
+        //         //清除之前线段
+        //         clearFeature(_segment)
+        //         //drawSingleFeature(_gradeNum,_segment)
+        //     else
+        //         continue
+        //     i := i-1
+
+
+
+//#region @function 合并处理包含关系的bar 并从已经处理完合并关系的bar中查找 顶 底
+//@return [isTopOrBottom,topOrBottomTime,topOrBottomPrice]
+mergeBarAndFindTopAndBottom(bool isCyc) =>
+    if(isCyc)
+        //最后一笔
+        Pen _lastPen = na
+        if(array.size(pens) > 1)
+            _lastPen := array.get(pens,array.size(pens)-1)
+        //取得最后一次处理合并后的bar,如果当前没有的话使用上一根bar
+        preHigh = high[1]
+        preLow  = low[1]
+        preTime = time[1]
+        preBarIndex = bar_index[1]
+        if( array.size(mergeHigh)>0 )
+            preHigh := array.pop(mergeHigh)
+        if( array.size(mergeLow)>0 )
+            preLow := array.pop(mergeLow)
+        if( array.size(mergeTime)>0 )
+            preTime := array.pop(mergeTime)
+        if( array.size(mergeBarIndex)>0 )
+            preBarIndex := array.pop(mergeBarIndex)
+        //判断是否存在包含关系
+        isLeftContain  =   (preHigh >= high and preLow <= low)
+        isRightContain =   (high >= preHigh and low <= preLow)
+        isContain      =   isLeftContain or isRightContain
+        //当前合并k线方向 0:无方向 1:上升 -1:下降
+        direction      =if not isContain
+            high >= preHigh ? 1 : -1
+        else
+            if(array.size(mergeHigh) >= 1)
+                preHigh >= array.get(mergeHigh,array.size(mergeHigh) -1 ) ? 1 : -1
+            else
+                preHigh >= preHigh[1] ? 1 : -1
+        // if(array.size(pens)>0 and isContain)
+        //     Pen _lastPen = array.get(pens,array.size(pens)-1)
+        //     if(_lastPen.direction == 1 and high > _lastPen.high)
+        //         isContain := false
+        //     else if(_lastPen.direction == -1 and low < _lastPen.low)
+        //         isContain := false
+        if (isContain)
+            array.push(mergeHigh,direction == 1 ? math.max(high , preHigh) :  math.min(high , preHigh))
+            array.push(mergeLow ,direction == 1 ? math.max(low  , preLow)  :  math.min(low  , preLow))
+            //时间设置为包含关系中顺应方向的极值bar时间
+            array.push(mergeTime,direction == 1 ? (high >= preHigh ? time :preTime) : (low <= preLow ? time :preTime) )
+            array.push(mergeBarIndex,direction == 1 ? (high >= preHigh ? bar_index :preBarIndex) : (low <= preLow ? bar_index :preBarIndex))
+            preTime := array.get(mergeTime,array.size(mergeTime) - 1)
+        else
+            array.push(mergeHigh, preHigh )
+            array.push(mergeLow , preLow )
+            array.push(mergeTime, preTime)
+            array.push(mergeBarIndex,preBarIndex)
+            array.push(mergeHigh, high )
+            array.push(mergeLow , low )
+            array.push(mergeTime, time)
+            array.push(mergeBarIndex,bar_index)
+        // //修复问题，出现比前面更有利的极值，但因为包含关系处理后无法体现
+        if(not na(_lastPen) and not isContain)
+            if(_lastPen.direction == 1 and high > high[1] and low > low[1] )
+                isContain := false
+            else if(_lastPen.direction == -1 and high < high[1] and low < low[1] )
+                isContain := false
+        //#2:测试找到所有的顶底分型(3根不重合的，中间一根是极值)
+        isUp     =     bool(na)
+        isDown   =     bool(na)
+        isTop    =     bool(na)
+        isBottom =     bool(na)
+
+        //合并处理后里面有至少2根k线，判断顶底
+        if(array.size(mergeHigh)>=2)
+            mergeBarLastHigh = array.get(mergeHigh,array.size(mergeHigh)-1)
+            mergeBarLastLow  = array.get(mergeLow,array.size(mergeLow)-1)
+            mergeBarLastPreHigh = array.get(mergeHigh,array.size(mergeHigh)-2)
+            mergeBarLastPreLow  = array.get(mergeLow,array.size(mergeLow)-2)
+            isUp     :=     mergeBarLastHigh > mergeBarLastPreHigh and mergeBarLastLow > mergeBarLastPreLow
+            isDown   :=     mergeBarLastHigh < mergeBarLastPreHigh and mergeBarLastLow < mergeBarLastPreLow
+            isTop    :=     isUp[1]   and isDown
+            isBottom :=     isDown[1] and isUp
+
+        if(isShowTopAndBottom)
+            label _label = label.new(na,na,xloc = xloc.bar_time,size=size.auto)
+            if(isTop)//顶分型
+                tooltip = str.tostring(array.get(mergeHigh,array.indexof(mergeTime,preTime)))
+                label.set_xy(_label,preTime,na)
+                label.set_yloc(_label,yloc.abovebar)
+                label.set_color(_label,color.red)
+                label.set_style(_label,label.style_triangledown)
+                label.set_tooltip(_label,tooltip)
+            if(isBottom)//底分型
+                tooltip = str.tostring(array.get(mergeLow,array.indexof(mergeTime,preTime)))
+                label.set_xy(_label,preTime,na)
+                label.set_yloc(_label,yloc.belowbar)
+                label.set_color(_label,color.green)
+                label.set_style(_label,label.style_triangleup)
+                label.set_tooltip(_label,tooltip)
+        //顶 底   
+        isTopOrBottom  = (isTop) ? 1 : isBottom ? -1 : 0
+        //对应的k线时间
+        int topOrBottomTime = na
+        if(isTopOrBottom == 1 or isTopOrBottom == -1)
+            topOrBottomTime := preTime
+        //对应的价格
+        float topOrBottomPrice = na
+        array.push(peakIndexs,0)
+        if(isTopOrBottom == 1)
+            topOrBottomPrice := array.get(mergeHigh,array.indexof(mergeTime,topOrBottomTime))
+            array.set(peakIndexs,array.indexof(mergeTime,topOrBottomTime),1)
+        else if(isTopOrBottom == -1)
+            topOrBottomPrice := array.get(mergeLow,array.indexof(mergeTime,topOrBottomTime))
+            array.set(peakIndexs,array.indexof(mergeTime,topOrBottomTime),-1)
+
+        if(isTopOrBottom != 0)
+            array.push(peekEvents, PeekEvent.new(isTopOrBottom,topOrBottomPrice,topOrBottomTime,array.get(mergeBarIndex,array.indexof(mergeTime,topOrBottomTime))))
+        [isTopOrBottom,topOrBottomTime,topOrBottomPrice]
+    else
+        [0,0,0]
+//#endregion
+//#region 笔相关方法
+// //清理多少条之前的买卖点
+// clearPenOperate()=>
+
+//绘制笔对应的买卖点标记
+drawPenOperate(int _gradeNum,Pen _pen)=>
+    Grade _grade = array.get(grades,_gradeNum)
+    OperatePoint _operatePoint = _pen.operatePoint
+    if(not na(_operatePoint) and _grade.isShowOperate)
+        if(not na(_operatePoint.operateLabel))
+            label.delete(_operatePoint.operateLabel)
+        string _yloc = _operatePoint.operateType==1?yloc.belowbar:yloc.abovebar
+        string _style = _operatePoint.operateType==1? label.style_label_up:label.style_label_down
+        string _text = str.tostring(_operatePoint.typeNum)
+        string _tooltip = str.tostring(_operatePoint.price)
+        //添加macd背驰面积数据
+        if(not na(_grade.bCArea))
+            _tooltip += "\nMACD面积:"+str.tostring(_grade.innerBCArea)+":"+str.tostring(_grade.bCArea)
+        string _size = size.small
+        if(_gradeNum>1)
+            _size := size.normal
+        label _label = na
+        if(buyOrSellType == 1)
+            if(_operatePoint.typeNum<0)//类买卖点
+                string _showText = "💣"
+                if(_operatePoint.typeNum == -2 and _operatePoint.operateType>0)
+                    _showText := "🐮"
+                _label := label.new(_pen.endTime,_operatePoint.price,xloc = xloc.bar_time
+                     ,size=_size,yloc=_yloc,style=label.style_none,tooltip=_tooltip,textalign =text.align_center
+                     ,text=_showText)
+            else //正常买卖点
+                //绘制买卖点标签
+                _label := label.new(_pen.endTime,_operatePoint.price,xloc = xloc.bar_time
+                     ,size=_size,yloc=_yloc,style=_style,text=_text,tooltip=_tooltip,textalign =text.align_center
+                     ,color =_operatePoint.operateType>0? _grade.buyColor:_grade.sellColor
+                     ,textcolor= _operatePoint.operateType>0? _grade.buyNumberColor:_grade.sellNumberColor)
+        else
+            _text+=(_operatePoint.operateType==1?"买":"卖")
+            if(_operatePoint.typeNum<0)//类买卖点
+                string _showText = "类2卖"
+                if(_operatePoint.typeNum == -2 and _operatePoint.operateType>0)
+                    _showText := "类2买"
+                _label := label.new(_pen.endTime,_operatePoint.price,xloc = xloc.bar_time
+                     ,size=_size,yloc=_yloc,style=label.style_none,tooltip=_tooltip,textalign =text.align_center
+                     ,color =color.white
+                     ,textcolor= _operatePoint.operateType>0? _grade.buyNumberColor:_grade.sellNumberColor
+                     ,text=_showText)
+            else //正常买卖点
+                //绘制买卖点标签
+                _label := label.new(_pen.endTime,_operatePoint.price,xloc = xloc.bar_time
+                     ,size=_size,yloc=_yloc,style=_style,text=_text,tooltip=_tooltip,textalign =text.align_center
+                     ,color =color.rgb(255, 255, 255,100)
+                     ,textcolor= _operatePoint.operateType>0? _grade.buyNumberColor:_grade.sellNumberColor)
+        _operatePoint.operateLabel := _label
+    true
+delDrawPenOperate(int _gradeNum,Pen _pen)=>
+    Grade _grade = array.get(grades,_gradeNum)
+    OperatePoint _operatePoint = _pen.operatePoint
+    if(not na(_operatePoint) and _grade.isShowOperate)
+        if(not na(_operatePoint.operateLabel))
+            //print("del")
+            label.delete(_operatePoint.operateLabel) 
+        _pen.operatePoint :=na
+    true
+//获得指定笔最近的一个中枢(在最后线段,不包含自身所在中枢)
+getLastPivotByPen(int _gradeNum,Pen _pen)=>
+    Grade _grade = array.get(grades,_gradeNum)
+    Segment[] _segments = getGradeSegments(_gradeNum)
+    Pen[] _pens= getGradePens(_gradeNum)
+    Segment _operateSegament =  array.get(_segments,array.size(_segments)-1)
+    Pivot _prePivot = na
+    if(na(_prePivot))
+        for j=0 to array.size(_operateSegament.pivots)>0 ? array.size(_operateSegament.pivots)-1:na
+            Pivot _pivot = array.get(_operateSegament.pivots,j)
+            if(_pivot.endTime < _pen.endTime)
+                _prePivot := _pivot
+    _prePivot
+//获得自身所在的中枢
+getSelfPivotByPen(int _gradeNum,Pen _pen)=>
+    Grade _grade = array.get(grades,_gradeNum)
+    Segment[] _segments = getGradeSegments(_gradeNum)
+    Pen[] _pens= getGradePens(_gradeNum)
+    Segment _operateSegament =  array.get(_segments,array.size(_segments)-1)
+    Pivot _selfPivot = na
+    //首先取得自身所在中枢，如果自身没有的话再找上一个中枢
+    for j=0 to array.size(_operateSegament.pivots)>0 ? array.size(_operateSegament.pivots)-1:na
+        Pivot _pivot = array.get(_operateSegament.pivots,j)
+        if(_pivot.startTime<=_pen.startTime and  _pivot.endTime >= _pen.endTime)
+            _selfPivot := _pivot
+    _selfPivot
+//检测买卖点分型过滤(如:底分型，最右边k线要求 1:绿色 2::收盘价要高于底k最高处)
+filterOperateType(int _gradeNum,Pen _pen)=>
+    bool isResult = false
+    //取得验证分型
+    int _direction = _pen.direction
+    //取得分型最后K
+    if(_gradeNum == 1)
+        int _kBarIndexCurrent = bar_index - array.get(mergeBarIndex,array.indexof(mergeTime,_pen.endTime))
+        int _kBarIndexNext =_kBarIndexCurrent+1
+        float _close = close[_kBarIndexNext]
+        float _open = open[_kBarIndexNext]
+        float _high = high[_kBarIndexNext]
+        float _low = low[_kBarIndexNext]
+        //print("1_kBarIndexCurrent:"+str.tostring(_kBarIndexCurrent)+"\n_kBarIndexNext:"+str.tostring(_kBarIndexNext))
+        //print("_close:"+str.tostring(_close)+"\n_open:"+str.tostring(_open))
+        if(_direction == 1)
+            float _topHighPrice = high[_kBarIndexCurrent]
+            if(_open > _close and _high < _topHighPrice)
+                isResult := true
+        else if(_direction == -1)
+            float _topOrLowPrice = low[_kBarIndexCurrent]
+            if(_open < _close and _low > _topOrLowPrice)
+                isResult := true
+    else
+        isResult := true
+    isResult
+//分型停顿过滤 
+filterOperateVerifyType(int _gradeNum,Pen _pen)=>
+    bool isResult = false
+    //取得验证分型
+    int _direction = _pen.direction
+    if(_gradeNum == 1 )
+        int _kBarIndexCurrent =bar_index -  array.get(mergeBarIndex,array.indexof(mergeTime,_pen.endTime))
+        int _kBarIndexNext =_kBarIndexCurrent+1
+        float _close = close[_kBarIndexNext]
+        float _high = high[_kBarIndexNext]
+        float _low = high[_kBarIndexNext]
+        //print("2_kBarIndexCurrent:"+str.tostring(_kBarIndexCurrent)+"\n_kBarIndexNext:"+str.tostring(_kBarIndexNext))
+        //取得笔的幅度值
+        float _penPriceAmplitude = math.abs(_pen.high - _pen.low)
+        if(_direction == 1)
+            float _topOrLowPrice = low[_kBarIndexCurrent]
+            if(_close<=_topOrLowPrice)
+                isResult := true
+            //如果不成立的话最后k线收盘价已经达到笔的50%
+            else
+                if( (_pen.high - _low)/_penPriceAmplitude >=0.5 )
+                    isResult := true 
+        else if(_direction == -1)
+            float _topOrLowPrice = high[_kBarIndexCurrent]
+            //print("_close:"+str.tostring(_close)+"\n_topOrLowPrice:"+str.tostring(_topOrLowPrice))
+            if(_close>=_topOrLowPrice)
+                //print("_close:"+str.tostring(_close)+"\n_topOrLowPrice:"+str.tostring(high[_kBarIndexCurrent]))
+                isResult := true 
+            //如果不成立的话最后k线收盘价已经达到笔的50%
+            else
+                if( (_high -_pen.low)/_penPriceAmplitude >=0.5 )
+                    isResult := true 
+
+    isResult
+
+
+//获得指定笔对应的macd面积
+setPenMacdArea(Pen _pen)=>
+    float _area = 0
+    int _endBarIndex = array.get(mergeBarIndex,array.indexof(mergeTime,_pen.endTime))
+    int _startBarIndex = array.get(mergeBarIndex,array.indexof(mergeTime,_pen.startTime))
+    float[] _areas = array.slice(macdHist,  _startBarIndex ,_endBarIndex +1)
+    _pen.area := _areas
+    for int i=0 to array.size(_areas)-1
+        _area += math.abs(array.get(_areas,i))
+    _pen.macdArea := _area
+    
+
+        
+//总的买卖点过滤
+filterOperate(int _gradeNum,Segment _segment,Pen _pen)=>
+    //只对进行中的笔进行过滤
+    Pen[] _pens= getGradePens(_gradeNum)
+    //过滤只针对当前最后一笔
+    if(array.indexof(_pens,_pen) == array.size(_pens)-1 and _gradeNum==1)
+        Pen _checkPen = _pen
+        if(_gradeNum>1)
+            _checkPen := array.get(_pens,_segment.endPenIndex)
+        //print("*******************")
+        int maxNum = 0
+        //基础分型过滤
+        if(p_operatePoint_filter_part_base)
+            maxNum += 1
+        //需要分型停顿验证
+        if(p_operatePoint_filter_part)
+            maxNum += 1
+        int checkResult = 0
+        if(p_operatePoint_filter_part_base)
+            if(filterOperateType(_gradeNum,_checkPen))
+                checkResult +=1
+        if(p_operatePoint_filter_part)
+            if(filterOperateVerifyType(_gradeNum,_checkPen))
+                checkResult +=1
+        //print("checkResult:"+str.tostring(checkResult)+"\nmaxNum:"+str.tostring(maxNum))
+        checkResult >=maxNum
+    else
+        true
+
+//查询当前为完结的订单中是否存在指定ID的订单
+// findOrderBy(string orderid)=>
+//     ret = -1
+//     if(strategy.opentrades==0)
+//         ret
+//     else
+//         for i=0 to strategy.opentrades-1
+//             if(strategy.opentrades.entry_id(i) == orderid)
+//                 ret := i
+//                 break
+//         ret
+// *买卖点策略的使用
+// *@param _gradeNum:等级
+// *@param _segment:所属线段
+// *@parm _pen :所属笔
+// *@parm _operatePoint:对应买卖点信息
+strategyCreate(int _gradeNum,Segment _segment,Pen _pen,OperatePoint _operatePoint)=>
+    // true  
+    if( (p_follow_trend and _operatePoint.operateType != _segment.direction) or not p_follow_trend)
+        Pen[] _pens= getGradePens(_gradeNum)
+        Segment[] _segments = getGradeSegments(_gradeNum)
+        bool isCreateStrategy = true
+        //线段包含中枢数量
+        int  _pivotNum = _segment.pivots.size()  
+        //线段包含笔数量
+        int _segmentPenNum = _segment.endPenIndex - _segment.startPenIndex + 1
+        //取得上一笔
+        Pen _prePen = na
+        if(array.size(_pens)>=2)
+            _prePen := array.get(_pens,array.indexof(_pens,_pen))
+        //取得上一个线段
+        Segment _preSegment = na
+        if(array.size(_segments)>=2)
+            _preSegment := array.get(_segments,array.indexof(_segments,_segment))
+        //如果是一买卖的话
+        if(_operatePoint.typeNum == 1 and p_strategy_one)
+            //验证是否包含中枢或者5笔转折
+            if(_segmentPenNum<=0 and _segmentPenNum<5 )
+                isCreateStrategy := false
+        //2买卖
+        if(_operatePoint.typeNum==2 and p_strategy_two)
+            Pivot _lastPivot = na
+            if( na(_preSegment) )
+                isCreateStrategy := false  
+            else
+                //判断是否有针对中枢的三买卖
+                if(na(_prePen))
+                    isCreateStrategy := false
+                else
+                    if(_segment.direction == 1 and _prePen.low > _segment.high)
+                        isCreateStrategy := false
+                    else if(_segment.direction == -1 and _prePen.high < _segment.low)
+                        isCreateStrategy := false
+            //print(str.tostring(isCreateStrategy)+"=="+str.tostring(strategy.equity))
+        //买卖订单后缀id，如买入 buy_1 卖出 sell_2
+        string id = ""
+        string _id_suffix =  str.tostring(array.indexof(_pens,_pen)+1)+"_"+str.tostring(math.round(math.random(1,100,0)))
+        string comments = ""
+        if(isCreateStrategy)
+            if(_operatePoint.operateType == 1)
+                id := "buy_"+_id_suffix
+                //取得止损价格,该笔最低点设置为止损价格
+                float _stopPrice = _pen.low
+                float _getPrice = close[0]//array.get(_pen.mergeHigh,array.size(_pen.mergeHigh)-1)
+                // if(strategy.equity>0)
+                    //comments := "id:"+id+"\n买入价位"+str.tostring(_getPrice)+"id:"+id+"\n止损价位:"+str.tostring(_stopPrice)
+                strategy.entry(id,strategy.long,comment = "多:id:"+str.tostring(id)+"\n止损价位:"+str.tostring(_stopPrice))
+                    //print("多:"+str.tostring(open[0])+"\n止损:"+str.tostring(_stopPrice))
+                    //strategy.exit(id+"_exit",id,limit =_stopPrice,comment = "多:id:"+str.tostring(id)+"\n止损价位:"+str.tostring(_stopPrice) )
+                    //strategy.exit(id+"_exit",id,limit =_stopPrice)
+                strategy.exit(id+"_stop",id ,stop =_stopPrice)   
+            else if(_operatePoint.operateType == -1)
+                id := "sell_"+_id_suffix
+                //取得止损价格,该笔最高点设置为止损价格
+                float _stopPrice = _pen.high
+                float _getPrice = close[0]//array.get(_pen.mergeLow,array.size(_pen.mergeLow)-1)
+                if(strategy.equity>0)
+                    //comments := "id:"+id+"\n卖出价位"+str.tostring(_getPrice)+"\止损价位:"+str.tostring(_stopPrice)
+                    strategy.entry(id,strategy.short ,comment = "空:id:"+str.tostring(id)+"\n止损价位:"+str.tostring(_stopPrice))
+                    //print("空:"+str.tostring(open[0])+"\n止损:"+str.tostring(_stopPrice))
+                    //strategy.exit(id+"_exit",id,limit =_stopPrice ,comment = "空:id:"+str.tostring(id)+"\n止损价位:"+str.tostring(_stopPrice))
+                    //strategy.exit(id+"_exit",id,limit =_stopPrice)
+                    strategy.exit(id+"_stop",id ,stop =_stopPrice)
+//检测验证1买卖点
+checkOneOperate(int _gradeNum,Segment _segment,Pen _checkPen,Pen[] _needDrawPens)=>
+    Pen[] _pens= getGradePens(_gradeNum)
+    Pen _lastPen = _checkPen
+    int _direction = _segment.direction
+    //再次判断出中枢这笔 和 进中枢笔 是否背驰
+    Pen _pivotStartPen = array.get(_pens,_segment.startPenIndex)
+    //判断前面是否有中枢
+    Pivot _prePivot = getLastPivotByPen(_gradeNum,_lastPen)
+    if(not na(_prePivot))
+        if(_prePivot.endPenIndex == array.indexof(_pens,_lastPen))
+            _pivotStartPen :=  array.get(_pens,_prePivot.startPenIndex)
+        else
+            _pivotStartPen :=  array.get(_pens,_segment.endPenIndex-2)
+    if(_lastPen.high-_lastPen.low < _pivotStartPen.high-_pivotStartPen.low  and filterOperate(_gradeNum,_segment,_lastPen))
+        OperatePoint _operatePoint =OperatePoint.new(-_direction,1,_direction==1?_lastPen.high:_lastPen.low,"")
+        bool isAlert = false
+        //只有最后一笔，并且之前没有买卖点，或者之前有买卖点但价格发生变化才进行报警
+        if(array.indexof(_pens,_lastPen) == array.size(_pens)-1)
+            if(na(_lastPen.operatePoint))
+                isAlert := true
+            else
+                if(_operatePoint.price != _lastPen.operatePoint.price)
+                    isAlert := true
+        if(not na(_lastPen.operatePoint))
+            //if(_lastPen.operatePoint.price != _operatePoint.price)
+            delDrawPenOperate(_gradeNum ,_lastPen)
+            //绘制背驰位置
+            //label.new(_lastPen.endTime,_lastPen.direction==1?_lastPen.high:_lastPen.low,style = label.style_cross,xloc = xloc.bar_time,yloc = yloc.price,size = size.tiny)
+        _lastPen.operatePoint := _operatePoint
+        array.push(_needDrawPens,_lastPen)
+        //设置报警标志
+        if(isAlert)
+            setAlertFlag(_gradeNum,_operatePoint)
+        if(p_strategy_one)
+            strategyCreate( _gradeNum, _segment, _checkPen,_operatePoint)
+//检测验证2买卖点
+checkTwoOperate(int _gradeNum,Segment _segment,Pen _pen,Pen[] _needDrawPens,int stype)=>
+    Pen[] _pens= getGradePens(_gradeNum)
+    //线段对应的方向
+    int _direction = _segment.direction
+    OperatePoint _operatePoint = na
+    if(_pen.direction != _direction)
+        _operatePoint := OperatePoint.new(_direction,stype,_direction==1?_pen.low:_pen.high,"")
+    else
+        Pen _prePen = array.get(_pens,_segment.endPenIndex)
+        if(_direction == 1)
+            if(_pen.high < _prePen.high)
+                _operatePoint := OperatePoint.new(-_direction,stype,_pen.high,"")
+        if(_direction == -1)
+            if(_pen.low > _prePen.low)
+                _operatePoint := OperatePoint.new(-_direction,stype,_pen.low,"")
+    //如果是笔中枢话
+    if(not na(_operatePoint))
+        if(filterOperate(_gradeNum,_segment,_pen))
+            bool isAlert = false
+            //只有最后一笔，并且之前没有买卖点，或者之前有买卖点但价格发生变化才进行报警
+            if(array.indexof(_pens,_pen) == array.size(_pens)-1)
+                if(na(_pen.operatePoint))
+                    isAlert := true
+                else
+                    if(_operatePoint.price != _pen.operatePoint.price)
+                        isAlert := true
+            if(not na(_pen.operatePoint))
+                //if(_pen.operatePoint.price != _operatePoint.price)
+                delDrawPenOperate(_gradeNum ,_pen)
+            _pen.operatePoint := _operatePoint
+            array.push(_needDrawPens,_pen)
+            //print("isAlert:"+str.tostring(isAlert))
+            //设置报警标志
+            if(isAlert)
+                setAlertFlag(_gradeNum,_operatePoint)
+            if(p_strategy_two and stype == 2)
+                strategyCreate( _gradeNum, _segment, _pen,_operatePoint)
+            if(p_strategy_two_lei and stype == -2)
+                strategyCreate( _gradeNum, _segment, _pen,_operatePoint)  
+//检测验证3买卖点
+checkThreeOperate(int _gradeNum,Segment _segment,Pen _pen,Pen[] _needDrawPens)=>
+    Pen[] _pens= getGradePens(_gradeNum)
+    //当前笔index
+    int i = array.indexof(_pens,_pen)
+    //线段对应的方向
+    int _direction = _segment.direction
+    Pen _preDirectionPen = array.get(_pens,i-2)
+    float _price = (_direction == 1 and _pen.low > _preDirectionPen.high) ? _pen.low : (_direction == -1 and _pen.high <  _preDirectionPen.low) ? _pen.high : -1
+    //判断和上笔同方向的是否有缺口
+    // if(_direction == 1 and _pen.low > _preDirectionPen.high)
+    //     _price := _pen.low
+    // if(_direction == -1 and _pen.high <  _preDirectionPen.low)
+    //     _price := _pen.high
+    //不存在缺口的话再判断前面是否有中枢，并且不在中枢范围中
+    if(_price == -1)
+        //判断前面是否有中枢
+        Pivot _prePivot = getLastPivotByPen(_gradeNum,_pen)
+        //存在中枢的话，判断是否是出中枢第一笔
+        if(not na(_prePivot))
+            if(i == _prePivot.endPenIndex+1)
+                if(_direction == 1 and _pen.low > _prePivot.high)
+                    _price := _pen.low
+                if(_direction == -1 and _pen.high <  _prePivot.low)
+                    _price := _pen.high
+    if(_price != -1 and filterOperate(_gradeNum,_segment,_pen))
+        OperatePoint _operatePoint =OperatePoint.new(_direction,3,_price,"")
+        bool isAlert = false
+        //只有最后一笔，并且之前没有买卖点，或者之前有买卖点但价格发生变化才进行报警
+        if(array.indexof(_pens,_pen) == array.size(_pens)-1)
+            if(na(_pen.operatePoint))
+                isAlert := true
+            else
+                if(_operatePoint.price != _pen.operatePoint.price)
+                    isAlert := true
+        if(not na(_pen.operatePoint))
+            //if(_pen.operatePoint.price != _operatePoint.price)
+            delDrawPenOperate(_gradeNum ,_pen)
+        _pen.operatePoint := _operatePoint
+        array.push(_needDrawPens,_pen)
+        //设置报警标志
+        // if(isAlert)
+        //     setAlertFlag(_gradeNum,_operatePoint)
+        if(p_strategy_three)
+            strategyCreate( _gradeNum, _segment, _pen,_operatePoint)
+//@function 笔对应的买卖点操作
+//@param _gradeNum:指定级别的笔
+//@param _pen:笔对象
+penOperateHandler(int _gradeNum)=>
+    Segment[] _segments = getGradeSegments(_gradeNum)
+    Pen[] _pens= getGradePens(_gradeNum)
+
+    //取得该笔对应的线段信息,如果不属于任何线段测先默认是属于最后一个线段
+    Segment _operateSegament =  na
+    if(array.size(_segments)>0)
+        _operateSegament :=  array.get(_segments,array.size(_segments)-1)
+    //是否走买卖点逻辑
+    bool isCycOperatePoint = false
+    if(not na(_operateSegament))
+        //有线段，并且最后线段不能是1笔成段的
+        if(_operateSegament.endPenIndex - _operateSegament.startPenIndex>=2)
+            isCycOperatePoint := true
+    if(isCycOperatePoint)
+        Pivot[]   _OperatePivots =  _operateSegament.pivots
+        //线段对应的方向
+        int _direction = _operateSegament.direction
+        int _signNum = 0
+        //保存所有需要绘制的买卖点
+        Pen[] _needDrawPens = array.new<Pen>()
+        //首先清除最后线段及笔的买卖点信息
+        // for int i= _operateSegament.startPenIndex to array.size(_pens)-1
+        //     Pen _pen = array.get(_pens,i)
+        //     delDrawPenOperate(_gradeNum,_pen)
+        //对在线段内的笔买卖点处理
+        for int i= _operateSegament.startPenIndex to array.size(_pens)-1
+            _signNum += 1
+            //对应pen信息
+            Pen _pen = array.get(_pens,i)
+            //和线段不同向判断2,3买卖点
+            if(_pen.direction != _direction)
+                //如果是第一次反向的话并且极值不超过前一笔认定为2买卖点
+                if(_signNum == 2)
+                    checkTwoOperate(_gradeNum,_operateSegament,_pen,_needDrawPens,2)
+                else if(_signNum == 4  )
+                    Pen _preDirectionPen = array.get(_pens,i-2)
+                    float _price = -1
+                    //判断和上笔同方向的是否有缺口
+                    if(_direction == 1 and _pen.low > _preDirectionPen.high)
+                        _price := _pen.low
+                    if(_direction == -1 and _pen.high <  _preDirectionPen.low)
+                        _price := _pen.high
+                    if(_price==-1)
+                        checkTwoOperate(_gradeNum,_operateSegament,_pen,_needDrawPens,-2)
+                    else
+                        checkThreeOperate(_gradeNum,_operateSegament,_pen,_needDrawPens)
+                else if(_signNum % 2 == 0 and i!=0)
+                    checkThreeOperate(_gradeNum,_operateSegament,_pen,_needDrawPens)
+            //和线段同向时候
+            else
+                //线段最后一笔 1买卖(并且该线段至少要有一个中枢)
+                if(i == _operateSegament.endPenIndex and array.size(_operateSegament.pivots)>=1)
+                    //再次判断出中枢这笔 和 进中枢笔 是否背驰
+                    checkOneOperate(_gradeNum,_operateSegament,_pen,_needDrawPens)
+                else if(i == _operateSegament.endPenIndex+2)
+                    checkTwoOperate(_gradeNum,_operateSegament,_pen,_needDrawPens,2)
+                else if(i == _operateSegament.endPenIndex+4)//类2
+                    checkTwoOperate(_gradeNum,_operateSegament,_pen,_needDrawPens,-2)
+        //对买卖点进行绘制
+        for int i= _operateSegament.startPenIndex to array.size(_pens)-1
+            Pen _pen = array.get(_pens,i)
+            if(array.indexof(_needDrawPens,_pen)!=-1)
+                drawPenOperate(_gradeNum,_pen)
+            else
+                delDrawPenOperate(_gradeNum,_pen)
+//#endregion
+//#region @function 构建中枢相关函数
+// //提前绘制中枢，仅供显示使用
+// beforeDrawPivot(int _gradeNum) =>
+//     //取得级别对应的中枢
+//     Segment[] _segments = getGradeSegments(_gradeNum)
+//     //取得最后一个线段
+//     Segment _lastSegment = na
+//     //线段最后一个中枢
+//     Pivot   _lastPivot = na
+//     if(array.size(_segments) > 0 )
+//         _lastSegment  := array.last(_segments)
+//     if(not na(_lastSegment))
+//         //判断该线段是否有中枢,如果有中枢的话获得最后一个中枢
+//         if(array.size(_lastSegment.pivots)>0)
+//             _lastPivot := array.last(_lastSegment.pivots)
+//     //存在中枢的话直接扩展中枢到当前时间
+//     if(not na(_lastPivot))
+//         box _box = _lastPivot.box
+//         if(high > box.get_bottom(_box) and low < box.get_top(_box))
+//             box.set_right(_box,time)
+
+//给指定线段构建出一个中枢
+checkHaveNewPivot(int _gradeNum,Segment _segment,Pen[] _pens) =>
+    //线段方向
+    int _direction = _segment.direction
+    int _startPenIndex = _segment.startPenIndex + 1
+    Pivot _lastPivot = na
+    if(array.size(_segment.pivots)>0)
+        _lastPivot := array.last(_segment.pivots)
+        _startPenIndex := _lastPivot.endPenIndex + 1
+        // if(_gradeNum == 1)
+        //     print(":"+str.tostring(_startPenIndex))
+    //可能构建新的中枢
+    Pivot _pivot = na
+    //起始反向笔
+    Pen _startPen = na
+    for _checkSegmentIndex =_startPenIndex to array.size(_pens) -1  by 2
+        if(_checkSegmentIndex > array.size(_pens) -1)
+            break
+        Pen _tempPen = array.get(_pens,_checkSegmentIndex)
+        if(na(_startPen))
+            _startPen := _tempPen
+        else
+            //如果当前笔在前一个中枢的话直接跳过
+            if(not na(_lastPivot))
+                if(_startPen.high >= _lastPivot.low and _startPen.low <= _lastPivot.high )
+                    continue
+            float _minHighPrice = math.min( _tempPen.high,_startPen.high)
+            float _maxLowPrice = math.max(_tempPen.low,_startPen.low)
+            if( _minHighPrice > _maxLowPrice)
+                //中间笔
+                Pen _middlePen = array.get(_pens,_checkSegmentIndex - 1)
+                float _minPrice = math.max(_startPen.low,_tempPen.low,_middlePen.low)
+                float _maxPrice = math.min(_startPen.high,_tempPen.high,_middlePen.high)
+                _pivot := Pivot.new(_maxPrice,_minPrice,_startPen.startTime,_tempPen.endTime,_checkSegmentIndex,_checkSegmentIndex+4,_segment.direction,1)
+                break
+            else
+                _startPen := _tempPen
+    _pivot
+//清理提前绘制的中枢
+clearBeforeDrawPivot(int _gradeNum) =>
+    Grade _grade = array.get(grades,_gradeNum)
+    box _pivotBeforeDrawBox = _grade.pivotBeforeDrawBox
+    box.set_right(_pivotBeforeDrawBox,na)
+    box.set_left(_pivotBeforeDrawBox,na)
+//提前绘制中枢，仅供显示使用,用于最近中枢的展示以判断支持压力
+beforeDrawPivot(int _gradeNum) =>
+    Grade _grade = array.get(grades,_gradeNum)
+    box minPivotBeforeDrawBox  = _grade.pivotBeforeDrawBox
+    Pen[] _pens= getGradePens(_gradeNum)
+    //取得级别对应的线段
+    Segment[] _segments = getGradeSegments(_gradeNum)
+    //取得最后一个线段
+    Segment _lastSegment = (array.size(_segments) > 0 ) ? array.last(_segments) : na
+    Segment _preSegment = (array.size(_segments) > 1 )  ? array.get(_segments,array.size(_segments) - 2) : na
+    //线段最后一个中枢
+    Pivot   _lastPivot = na
+    if(not na(_lastSegment))
+        //判断该线段是否有中枢,如果有中枢的话获得最后一个中枢
+        if(array.size(_lastSegment.pivots)>0)
+            _lastPivot := array.last(_lastSegment.pivots)
+        //判断是否可以绘制新的中枢
+        Pivot _newPivot =  checkHaveNewPivot(_gradeNum,_lastSegment,_pens)
+        if(not na(_newPivot))
+            _lastPivot := _newPivot
+        //如果最终还是为na,那么对最后两个线段笔进行处理拍段是否有中枢
+        if(na(_lastPivot) and not na(_preSegment))
+            _lastPivot :=  checkHaveNewPivot(_gradeNum,_preSegment,_pens)
+        //存在中枢的话直接扩展中枢到当前时间
+        if(not na(_lastPivot))
+            if(high >= _lastPivot.low or low <= _lastPivot.high)
+                color _bgcolor =_lastPivot.direction == 1?_grade.pivotUpBgColor:_grade.pivotDownBgColor
+                // box.set_bgcolor(minPivotBeforeDrawBox,_bgcolor)
+                // box.set_border_color(minPivotBeforeDrawBox,_lastPivot.direction == 1?_grade.pivotUpBorderColor:_grade.pivotDownBordeColor)
+                box.set_bgcolor(minPivotBeforeDrawBox,color = color.rgb(126, 123, 123, 95))
+                box.set_border_color(minPivotBeforeDrawBox,_lastPivot.direction == 1?_grade.pivotUpBorderColor:_grade.pivotDownBordeColor)
+                box.set_lefttop(minPivotBeforeDrawBox,_lastPivot.startTime,_lastPivot.high)
+                if(minPivotBeforeDrawBox.get_top() == _lastPivot.high and minPivotBeforeDrawBox.get_left() == _lastPivot.startTime)
+                    box.set_rightbottom(minPivotBeforeDrawBox,time,_lastPivot.low)
+    1
+//给指定线段构建中枢
+delPivot(int _gradeNum,Pivot _pivot,Segment _segment) =>
+    //移除中枢显示
+    box.delete(_pivot.box)
+    //array.remove(_segment.pivots,array.indexof(_segment.pivots,_pivot))
+drawPivot(int _gradeNum,Pivot _pivot,Segment _segment) =>
+    Grade _grade = array.get(grades,_gradeNum)
+    Pivot[] _pivots = _segment.pivots
+    //没有box就先创建
+    bool isShowPivot = (_gradeNum == 1 and not p_showPenPivot) ? false :(_gradeNum == 1 and not p_showPenPivot) ? false : true
+    // if(_gradeNum == 1 and not p_showPenPivot)
+    //     isShowPivot := false
+    // if(_gradeNum > 1 and not p_showPivot)
+    //     isShowPivot := false
+    if(isShowPivot)
+        box _box = _pivot.box
+        if(na(_box))
+            //如果中枢发生扩展延伸
+            if(_pivot.endPenIndex - _pivot.startPenIndex+1 >= 9+2 and _gradeNum == 1)
+                _box := box.new(_pivot.startTime,_pivot.high,_pivot.endTime,_pivot.low,xloc = xloc.bar_time
+                                      ,bgcolor = _pivot.direction == 1?penExtendPivotUpBgColor:penExtendPivotDownBgColor
+                                      ,border_color = _pivot.direction == 1?penExtendPivotUpBorderColor:penExtendPivotDownBorderColor)
+            else
+                _box := box.new(_pivot.startTime,_pivot.high,_pivot.endTime,_pivot.low,xloc = xloc.bar_time
+                                     ,bgcolor = _pivot.direction == 1?_grade.pivotUpBgColor:_grade.pivotDownBgColor
+                                     ,border_color = _pivot.direction == 1?_grade.pivotUpBorderColor:_grade.pivotDownBordeColor)
+            _pivot.box  := _box
+        box.set_rightbottom(_box,_pivot.endTime, _pivot.low )
+        if(_pivot.endPenIndex - _pivot.startPenIndex+1 >= 9+2)
+            box.set_bgcolor(_box,_pivot.direction == 1?penExtendPivotUpBgColor:penExtendPivotDownBgColor)
+            box.set_border_color(_box, _pivot.direction == 1?penExtendPivotUpBorderColor:penExtendPivotDownBorderColor)
+    if(array.indexof(_pivots,_pivot) <= -1)
+        //将中枢加入集合中
+        //print("direction"+str.tostring(_pivot.direction))
+        array.push(_pivots,_pivot)
+
+//根据线段构建中枢       
+createPivot(int _gradeNum,Segment _segment,Pen[] _pens) =>
+    //中途修复，每次重新构建该线段中枢
+    if(array.size(_segment.pivots)>0)
+        for i=0 to array.size(_segment.pivots)-1
+            delPivot(_gradeNum,array.get(_segment.pivots,i),_segment)
+        _segment.pivots := array.new<Pivot>()
+    Grade _grade = array.get(grades,_gradeNum)
+    //取得该线段最后的中枢
+    Pivot _lastPivot = na
+    int _startPenIndex = _segment.startPenIndex
+    int _endPenIndex   = _segment.endPenIndex
+    // = str.tostring(_startPenIndex)+":"+str.tostring(_endPenIndex)
+    //string ini1 = ""
+    if(array.size(_segment.pivots)>0)
+        _lastPivot := array.get(_segment.pivots,array.size(_segment.pivots)-1)
+        _startPenIndex :=  _lastPivot.endPenIndex
+        //ini1 := "**:"+str.tostring(_startPenIndex)+":"+str.tostring(_endPenIndex)
+        //debugInfo.debugInfo += "\nstartPenIndex:"+str.tostring(_startPenIndex)+"\n _endPenIndex:"+str.tostring(_endPenIndex)
+    //debugInfo.debugInfo +="\npivotsize:"+str.tostring(array.size(_segment.pivots))+"\n_startPenIndex:"+str.tostring(_startPenIndex)
+    for _checkSegmentIndex =_startPenIndex to _endPenIndex
+        if(_checkSegmentIndex < _startPenIndex)
+            continue
+        if(_startPenIndex > _endPenIndex)
+            continue
+        //验证后续是否成中枢
+        bool isExtend = false
+        // if(array.size(_pens)==879)
+        //     runtime.error(ini+"==="+ini1+" 出现879:"+str.tostring(_startPenIndex)+":"+str.tostring(_endPenIndex))
+        //5笔信息
+        Pen _pen1 = array.get(_pens,_checkSegmentIndex+0)
+        Pen _pen2 = na
+        if(_checkSegmentIndex+1<=_endPenIndex)
+            _pen2 := array.get(_pens,_checkSegmentIndex+1)
+        Pen _pen3 = na
+        if(_checkSegmentIndex+2<=_endPenIndex)
+            _pen3 := array.get(_pens,_checkSegmentIndex+2)
+        Pen _pen4 = na
+        if(_checkSegmentIndex+3<=_endPenIndex)
+            _pen4 := array.get(_pens,_checkSegmentIndex+3)
+        Pen _pen5 = na
+        if(_checkSegmentIndex+4<=_endPenIndex)
+            _pen5 := array.get(_pens,_checkSegmentIndex+4)
+        //判断之前如果有中枢的话，并且该笔在中枢内就延伸中枢
+        if(not na(_lastPivot) ) //and _startPenIndex != _checkSegmentIndex
+            //if(_lastPivot.direction != _pen1.direction)
+            //取得线段对应的最后一笔
+            //Pen _lastPen = array.get(_pens,_segment.endPenIndex)
+            //判断该笔是否在中枢范围中，在范围中的话就延续中枢
+            //print("\ndirection:"+str.tostring(_pen1.direction !=_lastPivot.direction))
+            if (  not na(_pen2) and  _lastPivot.state ==1) //_pen1.direction !=_lastPivot.direction and
+                if(_pen2.high > _lastPivot.low and _pen2.low < _lastPivot.high)
+                    _lastPivot.endTime :=_pen2.endTime 
+                    _lastPivot.endPenIndex := array.indexof(_pens,_pen2)+1
+                    drawPivot(_gradeNum,_lastPivot,_segment)
+                    isExtend  := true
+                else
+                    _lastPivot.state :=2
+            if (  not na(_pen4) and  _lastPivot.state ==1) //_pen1.direction !=_lastPivot.direction and
+                if(_pen4.high > _lastPivot.low and _pen4.low < _lastPivot.high)
+                    _lastPivot.endTime :=_pen4.endTime 
+                    _lastPivot.endPenIndex := array.indexof(_pens,_pen4)+1
+                    drawPivot(_gradeNum,_lastPivot,_segment)
+                    isExtend  := true
+                else
+                    _lastPivot.state :=2
+        //debugInfo.debugInfo+="\nisExtend:"+str.tostring(isExtend)+"\n _checkSegmentIndex:"+str.tostring(_checkSegmentIndex)+"\n_endPenIndex:"+str.tostring(_endPenIndex)
+        // if(_endPenIndex == 799)
+        //     print(debugInfo.debugInfo)
+        //     break
+        //没有延续的话再判断至少有5笔重叠才能构成中枢
+        if( not isExtend and _checkSegmentIndex+4<=_endPenIndex)
+            // _pen2 = array.get(_pens,_checkSegmentIndex+1)
+            // _pen3 = array.get(_pens,_checkSegmentIndex+2)
+            // _pen4 = array.get(_pens,_checkSegmentIndex+3)
+            // _pen5 = array.get(_pens,_checkSegmentIndex+4)
+            float _minPrice = math.max(_pen1.low,_pen2.low,_pen3.low,_pen4.low,_pen5.low)
+            float _maxPrice = math.min(_pen1.high,_pen2.high,_pen3.high,_pen4.high,_pen5.high)
+            bool _hasInclude = _maxPrice > _minPrice
+            //debugInfo.debugInfo +="\pen1.high:"+str.tostring(_pen1.high)+"\n_pen1.low:"+str.tostring(_pen1.low)
+            _hasInclude :=_hasInclude and _pen1.high >= _maxPrice and _pen1.low <= _minPrice
+            _hasInclude :=_hasInclude and _pen2.high >= _maxPrice and _pen2.low <= _minPrice
+            _hasInclude :=_hasInclude and _pen3.high >= _maxPrice and _pen3.low <= _minPrice
+            _hasInclude :=_hasInclude and _pen4.high >= _maxPrice and _pen4.low <= _minPrice
+            _hasInclude :=_hasInclude and _pen5.high >= _maxPrice and _pen5.low <= _minPrice
+            //debugInfo.debugInfo +="\_hasInclude:"+str.tostring(_hasInclude)
+            if(_hasInclude)
+                //debugInfo.debugInfo +="\n_pen2.low:"+str.tostring(_pen2.low)+"\n_pen3.low:"+str.tostring(_pen3.low)+"\n_pen4.low:"+str.tostring(_pen4.low)
+                _minPrice := math.max(_pen2.low,_pen3.low,_pen4.low)
+                _maxPrice := math.min(_pen2.high,_pen3.high,_pen4.high)
+                //debugInfo.debugInfo += "\n_minPrice:"+str.tostring(_minPrice)+"\n_maxPrice:"+str.tostring(_maxPrice)
+                //print(debugInfo.debugInfo)
+                Pen _lastPen =  array.get(_pens,array.size(_pens)-1)
+                Pivot _pivot = Pivot.new(_maxPrice,_minPrice,_pen1.endTime,_pen5.startTime,_checkSegmentIndex,_checkSegmentIndex+4,_segment.direction,1)
+                // debugInfo.debugInfo +="\n_minPrice:"+str.tostring(_minPrice)+"\n_maxPrice:"+str.tostring(_maxPrice)
+                //      +"\n_checkSegmentIndex:"+str.tostring(_checkSegmentIndex)+"\n"
+                //print(debugInfo.debugInfo)
+                drawPivot(_gradeNum,_pivot,_segment)
+                //print("\n------------------------------------"+str.tostring(array.size(_segment.pivots)))
+        // else
+        //     print(debugInfo.debugInfo)
+        //为啥这样写，说了你又不懂,也许你以为你懂了，但你其实啥都不懂
+        if(array.size(_segment.pivots)>0)
+            _lastPivot := array.get(_segment.pivots,array.size(_segment.pivots)-1)
+            _startPenIndex :=  _lastPivot.endPenIndex
+    // if(_gradeNum == 1)
+    //     print(debugInfo.debugInfo)
+
+
+
+
+
+//#endregion
+
+//#region 构建线段
+//移除线段
+delSegment(int _gradeNum,Segment[] _segments,Pen[] _selfPens,Segment _segment) =>
+    clearBeforeDrawPivot(_gradeNum)
+    if(array.indexof(_segments,_segment) >= 0)
+        Grade _grade = array.get(grades,_gradeNum)
+        Pen[] _pens= getGradePens(_gradeNum)
+        line.delete(_segment.line)
+        //移除对应中枢显示
+        for i = 0 to (array.size(_segment.pivots) >0? array.size(_segment.pivots)-1: na)
+            delPivot(_gradeNum,array.get(_segment.pivots,i),_segment)
+        array.remove(_segments,array.indexof(_segments,_segment))
+        //移除模拟构建的笔
+        if(not na(_selfPens) and array.indexof(_selfPens,_segment.pen)>0)
+            //print("index:"+str.tostring(array.indexof(_selfPens,_segment.pen))+"\n size:"+str.tostring(array.size(_selfPens)))
+            delDrawPenOperate(_gradeNum,_segment.pen)
+            array.remove(_selfPens,array.indexof(_selfPens,_segment.pen))
+        if(array.size(_segments)>0)
+            Segment _preSegment = array.get(_segments,array.size(_segments)-1)
+            _preSegment.segmentState := 1
+            line.set_style(_preSegment.line,line.style_dashed)
+
+//段macd显示及处理(只处理最后一段)
+segementMacdHandler(int _gradeNum,Segment _segment)=>
+    Grade _grade = array.get(grades,_gradeNum)
+    Pen[] _pens= getGradePens(_gradeNum)
+    Pen _pen = array.last(_pens)
+    //比对的笔
+    Pen _comparePen = na
+    //笔内部是否背驰
+    bool _penInnerError = false
+    //进出段是否背驰
+    bool _segmentError = false
+    //判断笔内部是否背驰
+    if(_gradeNum == 1)
+        //判断一笔面积中是否中间有经历金死叉
+        if(_pen.direction == 1 and array.size(_pen.area)>0)
+            //print("_pen.area:"+str.tostring(array.last(_pen.area))+"\nareas:"+str.tostring(_pen.area))
+            //判断是否发生金叉
+            float _maxArea = array.max(_pen.area)
+            float _minArea = array.min(_pen.area)
+            bool _hasCoss = false
+            //发生金叉的话判断之前<0的最高绝对值
+            float _tempPice = math.abs(_minArea)
+            if(_maxArea>0 and _minArea<0)
+                _hasCoss := true
+            if(_hasCoss and _maxArea < _tempPice)
+                _penInnerError := true
+        else if(_pen.direction == -1 and array.size(_pen.area)>0)
+            //判断是否发生死叉
+            float _maxArea = array.max(_pen.area)
+            float _minArea = array.min(_pen.area)
+            bool _hasCoss = false
+            //发生金叉的话判断之前<0的最高绝对值
+            float _tempPice = math.abs(_minArea)
+            if(_maxArea>0 and _minArea<0)
+                _hasCoss := true
+            if(_hasCoss and _tempPice < _maxArea)
+                _penInnerError := true
+    else if(_gradeNum == 2)
+        Grade _gradeOne = array.get(grades,1)
+        if(not na(_gradeOne.bCLine) and not na(_gradeOne.innerBCLine))
+            _penInnerError := true
+    //初始背驰为空
+    line.delete(_grade.bCLine)
+    line.delete(_grade.innerBCLine)
+    _grade.bCArea := na
+    _grade.innerBCArea :=na
+    //判断进出段是否背驰
+    if(_segment.endPenIndex != _segment.startPenIndex )//排除单笔成段
+        //取得最后一个中枢
+        Pivot _lastPivot = na
+        if(array.size(_segment.pivots)>0)
+            _lastPivot := array.last(_segment.pivots)
+        bool isComparePivotPen = false
+        if(not na(_lastPivot))
+            if(array.indexof(_pens,_pen) <= _lastPivot.endPenIndex )
+                isComparePivotPen := true
+        //print("not na(_lastPivot):"+str.tostring(not na(_lastPivot))+"\npenindex:"+str.tostring(array.indexof(_pens,_pen))+"\nindex:"+str.tostring(_lastPivot.endPenIndex))
+        if(isComparePivotPen )
+            _comparePen := array.get(_pens,_lastPivot.startPenIndex)
+            if(_pen.macdArea<_comparePen.macdArea)
+                _segmentError := true
+        else if(array.indexof(_pens,_pen)-2>=0)
+            _comparePen := array.get(_pens,array.indexof(_pens,_pen)-2)
+            //print("------------"+str.tostring(_comparePen.high)+":"+str.tostring(_comparePen.low))
+            if(_pen.macdArea<_comparePen.macdArea)
+                _segmentError := true
+    // if(_gradeNum == 2)
+    //     print("\n_penInnerError:"+str.tostring(_penInnerError)+"\n_segmentError:"+str.tostring(_segmentError))
+    if(_penInnerError)
+        line _line =  line.new(na,na,na,na,xloc = xloc.bar_time,color = pMacdLineColor1,style = line.style_solid,width = pMacdLineWidth)
+        line.set_xy1(_line,_pen.startTime,_pen.direction==1?_pen.low:_pen.high)
+        line.set_xy2(_line,_pen.endTime,_pen.direction==1?_pen.high:_pen.low)
+        if(_segmentError)
+            _line.set_color(color = pMacdLineColor3)
+        _grade.innerBCLine := _line
+        _grade.innerBCArea := _pen.macdArea
+    if(_segmentError)
+        line _line = line.new(na,na,na,na,xloc = xloc.bar_time,color =pMacdLineColor2,style = line.style_solid,width = pMacdLineWidth)
+        line.set_xy1(_line,_comparePen.startTime,_comparePen.direction==1?_comparePen.low:_comparePen.high)
+        line.set_xy2(_line,_comparePen.endTime,_comparePen.direction==1?_comparePen.high:_comparePen.low)
+        _grade.bCLine := _line
+        _grade.bCArea := _comparePen.macdArea
+        if(not _penInnerError)
+            line _line2 =  line.new(na,na,na,na,xloc = xloc.bar_time,color = pMacdLineColor2,style = line.style_solid,width = pMacdLineWidth)
+            line.set_xy1(_line2,_pen.startTime,_pen.direction==1?_pen.low:_pen.high)
+            line.set_xy2(_line2,_pen.endTime,_pen.direction==1?_pen.high:_pen.low)
+            _grade.innerBCLine := _line2
+            _grade.innerBCArea := _pen.macdArea
+//将指定线段模拟成笔，以便后期构建更大级别线段
+createSelfPen(int _gradeNum,Segment _segment)=>
+    Pen[] _pens= getGradePens(_gradeNum)
+    Pen[] _selfPens = getGradeSelfPens(_gradeNum)
+    if(not na(_selfPens))
+        //计算该线段包含所有笔的面积
+        float _macdArea = 0
+        float[] _area = array.new_float()
+        for i= _segment.startPenIndex to _segment.endPenIndex+1
+            if(i>array.size(_pens)-1)
+                break
+            Pen _pen = array.get(_pens,i)
+            _macdArea += _pen.macdArea
+            array.push(_area,_pen.macdArea)
+        Pen _virtualPen = na
+        if(na(_segment.pen))
+            _virtualPen := Pen.new(_segment.high,_segment.low,_segment.startTime,_segment.endTime,1,_segment.direction,macdArea = _macdArea,area = _area)
+            _segment.pen := _virtualPen
+            array.push(_selfPens,_virtualPen)
+        else
+            _virtualPen :=_segment.pen
+            _virtualPen.high := _segment.high
+            _virtualPen.low := _segment.low
+            _virtualPen.startTime := _segment.startTime
+            _virtualPen.endTime := _segment.endTime
+            _virtualPen.macdArea := _macdArea
+            _virtualPen.area :=_area
+        //print("\n_segment.startPenIndex:"+str.tostring(_segment.startPenIndex)+"\n _segment.endPenIndex:"+str.tostring( _segment.endPenIndex)+"\nsize:"+str.tostring(array.size(_pens))+"\narea:"+str.tostring(_virtualPen.macdArea))
+    true
+//绘制线段
+drawSegment(int _gradeNum,Segment _segment) =>
+    clearBeforeDrawPivot(_gradeNum)
+    Grade _grade = array.get(grades,_gradeNum)
+    Segment[] _segments = getGradeSegments(_gradeNum)
+    Pen[] _selfPens = getGradeSelfPens(_gradeNum)
+    Pen[] _pens= getGradePens(_gradeNum)
+    Segment[] _ableSegments= getGradeAbleSegments(_gradeNum)
+    line _line = _segment.line
+    if(na(_segment.featureLine))
+        _segment.featureLine := array.new<line>()
+    //没有线就先创建
+    if(na(_line))
+        int _width =segmentWidth 
+        if(_gradeNum==2)
+            _width := parentSegmentWidth
+        _line := line.new(na,na,na,na,width =_width ,xloc = xloc.bar_time,color = _grade.segmentLineColor,style = _grade.segmentLineNoOverStyle)
+        _segment.line  := _line
+    line.set_xy1(_line,_segment.startTime,_segment.direction == 1 ? _segment.low : _segment.high)
+    line.set_xy2(_line,_segment.endTime,  _segment.direction == 1 ? _segment.high : _segment.low)
+    if(array.indexof(_segments,_segment) <= -1)
+        //如果有前一笔的话更新前一笔为确定状态
+        if(array.size(_segments)>0)
+            Segment _preSegment = array.get(_segments,array.size(_segments)-1)
+            _preSegment.segmentState := 2
+            line.set_style(_preSegment.line,_grade.segmentLineOverStyle)
+        _segment.pivots := array.new<Pivot>()
+        //将线段加入集合中
+        array.push(_segments,_segment)
+    if(_segment.segmentState == 2)
+        line.set_style(_segment.line,_grade.segmentLineOverStyle)
+    if(array.indexof(_segments,_segment) == array.size(_segments) -1)
+        _segment.segmentState := 1
+        line.set_style(_segment.line,_grade.segmentLineNoOverStyle)
+    if(not _grade.isShowLine)
+        line.set_xy1(_segment.line,na,na)
+        line.set_xy2(_segment.line,na,na)
+        //print("insert:"+str.tostring(array.size(segments)))
+    //print("\n startPenIndex:"+str.tostring(_segment.startPenIndex)+"\nendPenIndex:"+str.tostring(_segment.endPenIndex))
+    if(_segment.segmentState == 2)
+        line.set_style(_line,line.style_solid)
+    //构建模拟该线段对应的笔对象
+    createSelfPen(_gradeNum,_segment)
+    //发布构建趋势时间
+    if(_gradeNum == 1)
+        array.push(trendEvents,1)
+    //绘制中枢
+    createPivot(_gradeNum,_segment,_pens)
+    // //重新绘制买卖点
+    // if( _gradeNum+1 <= array.size(grades)-1)
+    //     penOperateHandler(_gradeNum+1)
+    //线段背驰显示逻辑处理
+    bool isShowMacd = (p_ShowBC_low and _gradeNum==1) ? true : (p_ShowBC and _gradeNum==2) ? true : false
+    isShowMacd ? segementMacdHandler(_gradeNum,_segment) : na
+//检测线段成立条件
+checkSegmentCondition(int _gradeNum ,Segment _preSegment,Segment _lastSegment,Pen[] _pens)=>
+    //当前验证线段方向
+    int _direction = -_lastSegment.direction
+    int _overNum = 0
+    //1:判断从最后pen当当前是否至少3根并且最后一根和最后线段方向相反
+    int _lastEndPenIndex = _lastSegment.endPenIndex
+    if( _lastEndPenIndex + 3 < array.size(_pens) )
+        _overNum += 1
+    // if(_gradeNum == 2)
+    //     print("_overNum:"+str.tostring(_overNum)+" \n_lastEndPenIndex:"+str.tostring(_lastEndPenIndex)+"\nsize:"+str.tostring(array.size(_pens)))
+    //2:判断最后一笔极值是否超过上上笔
+    if(_overNum>=1)
+        Pen _lastDirectionPen = na
+        //从下一笔开始，验证是否有
+        for i=_lastSegment.endPenIndex+1 to array.size(_pens)-1
+            Pen _tempPen =  array.get(_pens,i)
+            if(_tempPen.direction == _direction)
+                if(na(_lastDirectionPen))
+                    _lastDirectionPen := _tempPen
+                else
+                    if(_direction == -1)
+                        if(_tempPen.low < _lastDirectionPen.low)
+                            _overNum += 1
+                            break
+                        else
+                            _lastDirectionPen := _tempPen
+                    if(_direction == 1)
+                        if(_tempPen.high > _lastDirectionPen.high)
+                            _overNum += 1
+                            break
+                        else
+                            _lastDirectionPen := _tempPen
+    bool _isGap = false
+    Pen _lastPen = array.get(_pens,array.size(_pens)-1)
+    //判断最后线段是否存在缺口
+    if(not na(_preSegment))
+        if(_lastSegment.endPenIndex - _lastSegment.startPenIndex >= 2  and _preSegment.endPenIndex - _preSegment.startPenIndex >= 2)
+            Pen _segmentLastPen = array.get(_pens,_lastSegment.startPenIndex )
+            Pen _preSegmentLastPen = array.get(_pens,_preSegment.endPenIndex - 1)
+            //判断2者是否存在缺口
+            if(_lastSegment.direction == 1)
+                if( _segmentLastPen.high < _preSegmentLastPen.low)
+                    _isGap := true
+            else
+                if(_segmentLastPen.low > _preSegmentLastPen.high)
+                    _isGap := true
+    if(_gradeNum == 1)
+        debugInfo.debugInfo+="_overNum:"+str.tostring(_overNum)+"\n_isGap:"+str.tostring(_isGap)+"\npensize:"+str.tostring(array.size(_pens))+"\nlast:"+str.tostring(_lastSegment.endPenIndex)
+    //3:特殊处理线段，如果当前一笔幅度和前一个线段相比达到指定数值允许直接可以一笔成段(方向和当前线段方向相反才行)
+    if(_overNum  <2 and not _isGap and array.size(_pens)-1 != _lastSegment.endPenIndex and p_penToSegmentRadio >0)
+        if(math.abs(_lastPen.high - _lastPen.low)/math.abs(_lastSegment.high - _lastSegment.low) >= p_penToSegmentRadio/100 
+             and _lastPen.direction != _lastSegment.direction)
+            _overNum := 2
+    _overNum>=2
+//该方法判断线段破坏情况状况
+//此方法判断线段划分2种方式 不处理左包含  返回是否形成对应分型   是否有缺口
+checkSegmentOverType(Segment segment,Pen[] _pens)=>
+    //1:获得该线段方向
+    int _segmentDirection = segment.direction
+    //2:获得标椎特征序列(只处理右合并)
+    Pen[] _resultPen = array.new<Pen>()
+    //发现对应分型index
+    int _topOrBottomIndex = -1
+    //是否有缺口
+    bool _hasGap = false
+    //按照顺序合并笔
+    for i=segment.startPenIndex to array.size(_pens) - 1
+        Pen _currentPen = array.get(_pens,i)
+        //方向相同直接不处理
+        if(_currentPen.direction == _segmentDirection)
+            continue
+        Pen _lastResultPen = na
+        //debugInfo.debugInfo  := "*****\n"
+        if(array.size(_resultPen)>0)
+            _lastResultPen := array.get(_resultPen,array.size(_resultPen)-1)
+        if(na(_lastResultPen))
+            array.push(_resultPen,_currentPen)
+        else
+            //判断是否存在包含关系(不处理左包含)
+            isLeftContain  =   (_lastResultPen.high >= _currentPen.high and _lastResultPen.low <= _currentPen.low)
+            //isRightContain =   (_currentPen.high >= _lastResultPen.high  and _currentPen.low <= _lastResultPen.low)
+            isContain      =   isLeftContain  
+            if(isContain)
+                Pen _mergePen =na
+                if(_segmentDirection == -1)
+                    _mergePen := Pen.new(math.min(_currentPen.high , _lastResultPen.high),math.min(_currentPen.low  , _lastResultPen.low))
+                else if(_segmentDirection == 1)
+                    _mergePen := Pen.new(math.max(_currentPen.high , _lastResultPen.high),math.max(_currentPen.low  , _lastResultPen.low))
+                array.pop(_resultPen)
+                array.push(_resultPen,_mergePen)
+                //debugInfo.debugInfo+="\n"+str.tostring(_mergePen.high)+":"+str.tostring(_mergePen.low)
+            else
+                array.push(_resultPen,_currentPen)
+            if(array.size(_resultPen)>=3)
+                //判断是否出现对应分型
+                Pen _lastPen1 =  array.get(_resultPen,array.size(_resultPen)-1)
+                Pen _lastPen2 =  array.get(_resultPen,array.size(_resultPen)-2)
+                if(_segmentDirection == -1)
+                    //debugInfo.debugInfo+="\n 1top:"+str.tostring(_lastPen2.low)+":"+str.tostring( _lastPen1.low)
+                    if(_lastPen2.low < _lastPen1.low)
+                        _topOrBottomIndex := array.size(_resultPen)-2
+                else if(_segmentDirection == 1)
+                    //debugInfo.debugInfo+="\n 2top:"+str.tostring(_lastPen2.high)+":"+str.tostring( _lastPen1.high)
+                    if(_lastPen2.high > _lastPen1.high)
+                        _topOrBottomIndex := array.size(_resultPen)-2
+                if(_topOrBottomIndex!=-1)
+                    break
+    //debugInfo.debugInfo+="\nsize:"+str.tostring(array.size(_resultPen))+"\n_topOrBottomIndex"+str.tostring(_topOrBottomIndex)
+    //print(debugInfo.debugInfo)
+    //3:判断是否构成对应分型及是否存在缺口
+    if(_topOrBottomIndex > 0)
+        Pen _lastPen1 =  array.get(_resultPen,_topOrBottomIndex-1)
+        Pen _lastPen2 =  array.get(_resultPen,_topOrBottomIndex+1)
+        if(_segmentDirection == -1)
+            if(_lastPen2.high < _lastPen1.low)
+                _hasGap :=true
+        else if(_segmentDirection == 1)
+            if(_lastPen2.low > _lastPen1.high)
+                _hasGap :=true
+    [_topOrBottomIndex,_hasGap]
+//校验是否删除当前线段修复上一个线段
+checkChangeSegment(int _gradeNum,Segment _preSegment,Segment _lastSegment,Pen _lastPen)=>
+    bool isChange = false
+    Pen[] _pens= getGradePens(_gradeNum)
+    //之前线段方向
+    int _preDirection = _preSegment.direction
+    //判断之前线段是否存在缺口
+    bool isGap = false
+    //是否超过之前线段极值
+    bool isMaxNum = false
+    Pen _lastSegementFirstPen = array.get(_pens,_lastSegment.startPenIndex)
+    Pen _preSegmentLastPen = array.get(_pens,_preSegment.endPenIndex -1)
+    //判断是否出现极值点，如果后面线段超过前面线段高低点
+    //之前线段是上升线段
+    if(_preDirection == 1 )
+        if(_lastPen.high > _preSegment.high and _lastSegment.low >= _preSegment.low)
+            isMaxNum :=true
+    //之前线段是下降线段
+    else
+        if(_lastPen.low < _preSegment.low and _lastSegment.high <=_preSegment.high) 
+            isMaxNum :=true
+    // //存在缺口，并且出现极值
+    // if(_gradeNum == 1)
+    //     print("_preSegment:"+str.tostring(_preSegment.direction)+" : "+str.tostring(_preSegment.high)+" : "+str.tostring(_preSegment.low)
+    //      +"\n _lastSegment:"+str.tostring(_lastSegment.direction)+" : "+str.tostring(_lastSegment.high)+" : "+str.tostring(_lastSegment.low))
+    
+    if(isMaxNum)
+        //判断是之前线段否有特征序列分型
+        [_topOrBottomIndex,_hasGap] = checkSegmentOverType(_preSegment,_pens)
+        // if(_gradeNum == 1)
+        //     print("_hasGap:"+str.tostring(_hasGap)+"\n"+str.tostring(_preSegment.direction)+":"+str.tostring(_preSegment.high)+":"+str.tostring(_preSegment.low))
+        //有缺口出现极值直接进行修复
+        if(_hasGap)
+            isChange :=true
+        else
+            //没有缺口，但是根据线段模式如果不是严格模式的话可以进行延伸
+            if(p_segmentType!=1)
+                isChange :=true
+            //再次进行校验,按照比例进行修正
+            if(not isChange and p_Segment_Change_Ratio != -1)
+                float _checkRadio = math.abs(_lastSegment.high-_lastSegment.low)/math.abs(_preSegment.high-_preSegment.low)
+                if(_checkRadio < p_Segment_Change_Ratio/100)
+                    isChange :=true   
+        // if(_gradeNum == 1)
+        //     print("_hasGap:"+str.tostring(_hasGap)+"\nisChange:"+str.tostring(isChange)+"\np_Segment_Change_Ratio:"+str.tostring(p_Segment_Change_Ratio))
+    isChange
+//检查构建第一个线段并返回
+createFirstSegment(int _gradeNum) =>
+    Grade       _grade    = array.get(grades,_gradeNum)
+    Pen[]       _pens     = getGradePens(_gradeNum)
+    //笔的数量
+    int         _penNum   =array.size(_pens)
+    //生成的线段
+    Segment _segment = na
+    int _startPenIndex = 0
+    //至少3笔构成一个线段,遍历循环找出第一个线段
+    while(_startPenIndex < _penNum)
+        //第一个同向笔
+        Pen _currentPen = array.get(_pens,_startPenIndex)
+        int _nextSameDirectionIndex = _startPenIndex+2
+        if(_nextSameDirectionIndex >= _penNum)
+            break
+        //下一个同向笔
+        Pen _nextPen = array.get(_pens, _nextSameDirectionIndex)
+        //如果同向笔后一个极值超过前一个的话判定成为线段
+        if(_currentPen.direction == -1 and _nextPen.low < _currentPen.low and _nextPen.high < _currentPen.high)
+            _segment := Segment.new(_currentPen.high,_nextPen.low,_currentPen.startTime,_nextPen.endTime,_startPenIndex,_nextSameDirectionIndex,1,-1)
+            drawSegment(_gradeNum,_segment)
+            break
+        else if(_currentPen.direction == 1 and _nextPen.high > _currentPen.high and _nextPen.low > _currentPen.low)
+            _segment := Segment.new(_nextPen.high,_currentPen.low,_currentPen.startTime,_nextPen.endTime,_startPenIndex,_nextSameDirectionIndex,1,1)
+            drawSegment(_gradeNum,_segment)
+            break
+        _startPenIndex += 1
+    _segment
+//对最后一段进行拆分
+segmentSplit(int _gradeNum)=>
+    //获得当前级别相关信息
+    Grade _grade = array.get(grades,_gradeNum)
+    //当前级别线段
+    Segment[] _segments = getGradeSegments(_gradeNum)
+    //当前级别所有的笔信息
+    Pen[] _pens= getGradePens(_gradeNum)
+    //取得最后一笔
+    Pen _lastPen = array.get(_pens,array.size(_pens)-1)
+    //可能成段的段信息
+    Segment[] _ableSegments= getGradeAbleSegments(_gradeNum)
+    bool _isChange = false
+    Segment _ableSegment = na
+    Segment _newSegment = na
+    //判断可能成段后面走出反向线段，
+    if(array.size(_ableSegments)>0 )
+        //判断从可能成段最后一笔开始后续3笔是否能够构成新的线段
+        _ableSegment := array.first(_ableSegments)
+        //如果线段对应的最后一笔和实际不相同不做处理(中途笔修复，其实该线段已经不可用)
+        if(array.size(_pens) <= _ableSegment.endPenIndex)
+            array.clear(_ableSegments)
+        else
+            Pen _lastSegmentPen =  array.get(_pens,_ableSegment.endPenIndex)
+            if(_ableSegment.direction == 1 and _lastSegmentPen.high != _ableSegment.high)
+                array.clear(_ableSegments)
+            else if(_ableSegment.direction == -1 and _lastSegmentPen.low != _ableSegment.low)
+                array.clear(_ableSegments)
+            else
+                Pen _ableFirstPen = na
+                if( array.size(_pens)-1 > _ableSegment.endPenIndex)
+                    for i = _ableSegment.endPenIndex+1 to array.size(_pens)-1
+                        Pen _tempPen = array.get(_pens,i)
+                        if(na(_ableFirstPen))
+                            _ableFirstPen := _tempPen
+                        else
+                            if(_ableSegment.direction == -1)
+                                if(_tempPen.high > _ableFirstPen.high)
+                                    _isChange := true
+                                    _newSegment := Segment.new(_tempPen.high,_ableSegment.low,_ableSegment.endTime,_tempPen.endTime,_ableSegment.endPenIndex+1,array.indexof(_pens,_tempPen),1,1)
+                                    break
+                            else if(_ableSegment.direction == 1)
+                                if(_tempPen.low < _ableFirstPen.low)
+                                    _isChange := true
+                                    _newSegment := Segment.new(_ableSegment.high,_tempPen.low,_ableSegment.endTime,_tempPen.endTime,_ableSegment.endPenIndex+1,array.indexof(_pens,_tempPen),1,-1)
+                                    break
+    //取得最后一个线段
+    Segment _lastSegment = na
+    if(array.size(_segments)>0)
+        _lastSegment := array.get(_segments,array.size(_segments)-1)        
+    //进行线段修复
+    if(_isChange)
+        if(_ableSegment.direction == 1)
+            //重新第一段
+            _lastSegment.low := _ableSegment.low
+            _lastSegment.endTime := _ableSegment.startTime
+            _lastSegment.endPenIndex := _ableSegment.startPenIndex-1
+            drawSegment(_gradeNum,_lastSegment)
+            //添加可能成笔为正式成笔
+            drawSegment(_gradeNum,_ableSegment)
+            //后续一笔
+            drawSegment(_gradeNum,_newSegment)
+            array.clear(_ableSegments)
+        else if(_ableSegment.direction == -1)
+            //重新更新最后一笔
+            _lastSegment.high := _ableSegment.high
+            _lastSegment.endTime := _ableSegment.startTime
+            _lastSegment.endPenIndex := _ableSegment.startPenIndex-1
+            drawSegment(_gradeNum,_lastSegment)
+            // //添加可能成笔为正式成笔
+            drawSegment(_gradeNum,_ableSegment)
+            //后续一笔
+            drawSegment(_gradeNum,_newSegment)
+            array.clear(_ableSegments)
+    true
+
+//@function 构建线段
+//@param _segments:对应的线段集合  
+//@param _pens:对应的笔集合  
+//@param _selfPens:自身的模拟笔集合
+//@param _ableSegments:可能成段集合
+createSegment(int _gradeNum) =>
+    //获得当前级别相关信息
+    Grade _grade = array.get(grades,_gradeNum)
+    //当前级别线段
+    Segment[] _segments = getGradeSegments(_gradeNum)
+    //当前级别自身线段模拟的笔信息
+    Pen[] _selfPens = getGradeSelfPens(_gradeNum)
+    //当前级别所有的笔信息
+    Pen[] _pens= getGradePens(_gradeNum)
+    //可能成笔的笔信息
+    _ableSegments= getGradeAbleSegments(_gradeNum)
+    //取得最后一个线段
+    Segment _lastSegment = na
+    if(array.size(_segments)>0)
+        _lastSegment := array.get(_segments,array.size(_segments)-1)
+    //上个线段
+    Segment _preSegment = na
+    if(array.size(_segments)>=2)
+        _preSegment := array.get(_segments,array.size(_segments)-2)
+    //取得最新的笔
+    Pen _lastPen = array.get(_pens,array.size(_pens)-1)
+    //print("_gradeNum:"+str.tostring(_gradeNum)+"\n _grade:"+str.tostring(_grade.gradeNum)+"\n_grade.pens:"+str.tostring(array.size(_grade.pens))+"\npens:"+str.tostring(array.size(pens)))
+    int _oldSegmentSize = array.size(_segments)
+    //如果是第一个线段的话
+    if(na(_lastSegment)) //根据条件生成第一个线段
+        Segment _tempSegment =  createFirstSegment(_gradeNum)
+    //修正已有线段或产生新的线段
+    if(not na(_lastSegment)) 
+        //判断是否产生新的线段
+        Segment _newSegment = na
+        bool    _haveNew    = false
+        //验证当前进行中的是否成段   
+        _haveNew := not  _haveNew and checkSegmentCondition(_gradeNum, _preSegment,_lastSegment,_pens) 
+        // if(_gradeNum == 2)
+        //     print("*******\n_haveNew:"+str.tostring(_haveNew)+"\nstartIndex:"+str.tostring(_lastSegment.endPenIndex)+"\npen:"+str.tostring(array.size(_pens)-1))
+        if(_haveNew) //有新的线段
+            int _newDirection =  -_lastSegment.direction
+            float _high = _newDirection==1?_lastPen.high:_lastSegment.high
+            float _low = _newDirection==1?_lastSegment.low:_lastPen.low
+            _newSegment := Segment.new(_high,_low,_lastSegment.endTime,_lastPen.endTime,_lastSegment.endPenIndex+1,array.indexof(_pens,_lastPen),1,_newDirection)
+            drawSegment(_gradeNum,_newSegment)
+            array.clear(_ableSegments)
+        //没有生成新的线段的话判断是否对最后的线段进行修正
+        if(na(_newSegment))
+            if(_lastSegment.direction == _lastPen.direction)
+                if( _lastSegment.direction == -1 and _lastPen.low < _lastSegment.low)
+                    //更新线段
+                    _lastSegment.low := _lastPen.low
+                    _lastSegment.endTime := _lastPen.endTime
+                    _lastSegment.endPenIndex := array.size(_pens)-1
+                    drawSegment(_gradeNum,_lastSegment)
+                if( _lastSegment.direction ==  1 and _lastPen.high > _lastSegment.high)
+                    //更新线段
+                    _lastSegment.high := _lastPen.high
+                    _lastSegment.endTime := _lastPen.endTime
+                    _lastSegment.endPenIndex := array.size(_pens)-1
+                    drawSegment(_gradeNum,_lastSegment)
+            if(p_segmentType == 3)
+                segmentSplit(_gradeNum)
+        //没有产生新线段的时候进行线段修复处理
+        // if(_gradeNum == 1)
+        //     print("_newSegment:"+str.tostring(na(_newSegment))+"\n_preSegment:"+str.tostring(not na(_preSegment)))
+        if(na(_newSegment) and not na(_preSegment))
+            bool _isChange = checkChangeSegment(_gradeNum,_preSegment,_lastSegment,_lastPen)
+            // if(_gradeNum == 1)
+            //     print("direction:"+str.tostring(_preSegment.direction)+"\n bool1:"+str.tostring(_lastPen.high > _preSegment.high)+"\n bool2:"+str.tostring(_lastSegment.low >= _preSegment.low)+"\n_isChange:"+str.tostring(_isChange))
+            if(_preSegment.direction == 1 and _isChange)
+                //修正之前线段
+                _preSegment.high := _lastPen.high
+                _preSegment.endTime := _lastPen.endTime
+                _preSegment.endPenIndex := array.indexof(_pens,_lastPen)
+                drawSegment(_gradeNum,_preSegment)
+                //删除老线段
+                array.clear(_ableSegments)
+                array.push(_ableSegments,_lastSegment)
+                delSegment(_gradeNum,_segments,_selfPens,_lastSegment)
+            else if(_preSegment.direction == -1 and _isChange )
+                //修正之前线段
+                _preSegment.low := _lastPen.low
+                _preSegment.endTime := _lastPen.endTime
+                //_preSegment.pivots := array.new<Pivot>()
+                _preSegment.endPenIndex := array.indexof(_pens,_lastPen)
+                drawSegment(_gradeNum,_preSegment)
+                //删除老线段
+                array.clear(_ableSegments)
+                array.push(_ableSegments,_lastSegment)
+                delSegment(_gradeNum,_segments,_selfPens,_lastSegment)
+//#endregion
+
+//#region @function 构建笔
+drawRunningPen(Pen _lastPen)=>
+    if(isShowRunningPen)
+        runningPen.startTime := _lastPen.endTime
+        runningPen.endTime   := time
+        // line _line = line.new(runningPen.startTime,0,runningPen.endTime,0,xloc = xloc.bar_time,style = line.style_dotted,color=penColr,width=1)
+        // runningPen.line := _line
+        float y1 = 0
+        float y2 = _lastPen.direction == 1? low:high
+        if(_lastPen.direction == -1)
+            if(array.indexof(mergeTime,_lastPen.endTime) > 0 )
+                y1 := array.get(mergeLow,array.indexof(mergeTime,_lastPen.endTime))
+            if(low < _lastPen.low)
+                y2 :=na(line.get_y2(runningPen.line))?low : math.min(line.get_y2(runningPen.line),low)
+            else
+                y2 :=na(line.get_y2(runningPen.line))?y2 : math.max(line.get_y2(runningPen.line),y2)
+        else if(_lastPen.direction == 1)
+            if(array.indexof(mergeTime,_lastPen.endTime) > 0 )
+                y1 := array.get(mergeHigh,array.indexof(mergeTime,_lastPen.endTime))
+            if(high > _lastPen.high)
+                y2 :=na(line.get_y2(runningPen.line))?high : math.max(line.get_y2(runningPen.line),high)
+            else
+                y2 :=na(line.get_y2(runningPen.line))?y2: math.min(line.get_y2(runningPen.line),y2)
+        if(y1 != 0)
+            line.set_xy1(runningPen.line,runningPen.startTime,y1)
+        line.set_xy2(runningPen.line,runningPen.endTime,y2)
+        line.delete(runningPen.line)
+        line _copyLine = line.copy(runningPen.line)
+        runningPen.line:=_copyLine
+
+
+//删除笔
+delPen(Pen _pen) =>
+    if(array.indexof(pens,_pen) >= 0)
+        line.delete(_pen.line)
+        //print(">0:"+str.tostring(array.indexof(pens,_pen) >= 0)+"\npen index:"+str.tostring(array.indexof(pens,_pen)+1)+"\n:"+str.tostring(array.size(pens)))
+        //if(array.indexof(pens,_pen) >= 0 and array.indexof(pens,_pen)+1< array.size(pens))
+        array.remove(pens,array.indexof(pens,_pen))
+        if(array.size(pens)>0)
+            Pen _prePen = array.get(pens,array.size(pens)-1)
+            _prePen.penState := 1
+            line.set_style(_prePen.line,line.style_dashed)
+        Segment _lastSegment = na
+        if(array.size(segments)>0)
+            _lastSegment := array.last(segments)
+            if(_lastSegment.endPenIndex >= array.size(pens) )
+                delSegment(1,segments,pens,_lastSegment)
+        // //绘制创建线段
+        //createSegment(1)
+        delDrawPenOperate(1,_pen)
+        // //重新绘制买卖点
+        //penOperateHandler(1)
+
+
+//绘制笔并做后续处理
+drawPen(Pen _pen) =>
+    line _line = _pen.line
+    if(na(_line))
+        _line := line.new(na,na,na,na,width =penWidth ,xloc = xloc.bar_time,color = penColr,style = line.style_dashed)
+        _pen.line  := _line
+    if(p_isShowPen)
+        line.set_xy1(_line,_pen.startTime,_pen.direction == 1 ? _pen.low : _pen.high)
+        line.set_xy2(_line,_pen.endTime,  _pen.direction == 1 ? _pen.high : _pen.low)
+    if(array.indexof(pens,_pen) <= -1)
+        //如果有前一笔的话更新前一笔为确定状态
+        if(array.size(pens)>0)
+            Pen _prePen = array.get(pens,array.size(pens)-1)
+            _prePen.penState := 2
+            line.set_style(_prePen.line,line.style_solid)
+        //将笔加入集合中
+        array.push(pens,_pen)
+    if(_pen.penState == 2)
+        line.set_style(_line,line.style_solid)
+    //重置运行中的笔
+    if(_pen.direction == -1)
+        line.set_xy1(runningPen.line,_pen.endTime,_pen.low)
+    else
+        line.set_xy1(runningPen.line,_pen.endTime,_pen.high)
+    line.set_xy2(runningPen.line,_pen.endTime,na)
+    //计算当前笔对应的macd面积
+    setPenMacdArea(_pen)
+    //print("macdarea:"+str.tostring(_pen.macdArea))
+    //绘制创建线段
+    createSegment(1)
+    //重新绘制买卖点
+    //penOperateHandler(1)
+    //print(str.tostring(_pen.macdArea))
+
+//判断指定笔是否存在分型
+penHasTopAndBottom(Pen _pen) =>
+    bool _hasTB  = false
+    int _penEndIndex = array.indexof(mergeTime,_pen.endTime)
+    if(_penEndIndex != -1)
+        if(array.size(mergeTime)-1 > _penEndIndex)
+            if(_pen.direction == 1)
+                if(array.get(mergeLow,_penEndIndex+1) < array.get(mergeLow,_penEndIndex))
+                    _hasTB := true
+            else if(_pen.direction == -1)
+                if(array.get(mergeHigh,_penEndIndex+1) > array.get(mergeHigh,_penEndIndex))
+                    _hasTB := true
+    _hasTB
+//判断指定笔是否存反向在分型
+penHasAfterTopAndBottom(Pen _pen) =>
+    int _peakIndex  = -1
+    int _penEndIndex = array.indexof(mergeTime,_pen.endTime)
+    if(array.size(mergeTime)-1 > _penEndIndex)
+        if(_pen.direction == 1)
+            //print("&"+str.tostring(array.get(mergeLow,array.size(mergeLow)-1))+":"+str.tostring(array.get(mergeLow,array.size(mergeLow)-2)))
+            if(array.get(mergeLow,array.size(mergeLow)-1) > array.get(mergeLow,array.size(mergeLow)-2))
+                _peakIndex := array.size(mergeLow)  - 2
+        else if(_pen.direction == -1)
+            //print("*"+str.tostring(array.get(mergeLow,array.size(mergeLow)-1))+":"+str.tostring(array.get(mergeLow,array.size(mergeLow)-2)))
+            if(array.get(mergeLow,array.size(mergeLow)-1) < array.get(mergeLow,array.size(mergeLow)-2))
+                _peakIndex :=  array.size(mergeLow) -2
+    _peakIndex 
+//验证合并后的数量是否成立
+checkPenNumHasOver(Pen _pen,int _isTopOrBottom) =>
+    bool _penNumHasOver = false
+    int _startIndex = array.indexof(mergeTime,_pen.endTime)
+    //定点索引位置
+    int _endIndex   = array.size(mergeTime) - 2
+    if(isFastToPen and _isTopOrBottom == 0 )
+        _endIndex   := array.size(mergeTime) - 1
+        if(_startIndex+1 < array.size(mergeLow)-1)
+            //如果当前位置不是最高的话
+            if(_pen.direction == 1)
+                float[] _temp = array.slice(mergeLow,_startIndex+1,array.size(mergeLow)-1)
+                float _price = array.min(_temp)
+                //print("2:"+str.tostring(array.get(mergeLow,_endIndex))+"\n_price:"+str.tostring(_price))
+                if(array.get(mergeLow,_endIndex) > _price)
+                    _endIndex := _startIndex + 1
+            else if(_pen.direction == -1)
+                float[] _temp = array.slice(mergeHigh,_startIndex+1,array.size(mergeHigh)-1)
+                float _price = array.max(_temp)
+                //print("1:"+str.tostring(array.get(mergeHigh,_endIndex))+"\n_price:"+str.tostring(_price))
+                if(array.get(mergeHigh,_endIndex) < _price)
+                    _endIndex := _startIndex + 1
+    //获得对应的barIndex
+    int _startBarIndex = array.get(mergeBarIndex,_startIndex)
+    int _endBarIndex = array.get(mergeBarIndex,_endIndex)
+    //if(array.indexof(ablePen,_pen) != -1 ) 
+    //print("************_endIndex:"+str.tostring(_endIndex)+"\n_startIndex:"+str.tostring(_startIndex)+"\nisFastToPen:"+str.tostring(isFastToPen)+"\n_isTopOrBottom:"+str.tostring(_isTopOrBottom))
+    if(penType == -4)
+        //新笔(之间最少5根K线，4根不包含关系的k线)
+        //print("_startBarIndex:"+str.tostring(_startIndex)+"\n_endBarIndex:"+str.tostring(_endIndex))
+        if( math.abs(_endIndex -_startIndex ) + 1>=4 and  math.abs(_startBarIndex - _endBarIndex )+ 1 >= 5)
+            _penNumHasOver := true 
+    else
+        if(math.abs(_endIndex - _startIndex)+1 >= math.abs(penType))
+            _penNumHasOver := true
+    //如果是严格笔的话进行再次判断独立k线是否重合
+    if(_penNumHasOver and penTypeStr == "严笔")
+        if(_pen.direction == -1 )
+            float[] _temp = array.slice(mergeHigh,_startIndex+2,_endIndex)
+            //print("---"+str.tostring(_temp))
+            float _lastPrice  = array.get(mergeHigh,_startIndex+1)
+            float _maxPrice  = array.get(mergeHigh,_endIndex)
+            //print("2array.max(_temp):"+str.tostring(array.max(_temp))+"\n_lastPrice:"+str.tostring(_lastPrice))
+            if(array.max(_temp) <= _lastPrice )
+                _penNumHasOver := false
+        else if(_pen.direction == 1)
+            float[] _temp = array.slice(mergeLow,_startIndex+2,_endIndex)
+            //print("---"+str.tostring(_temp))
+            float _lastPrice  = array.get(mergeLow,_startIndex+1)  
+            //print("1array.min(_temp):"+str.tostring(array.min(_temp))+"\n_lastPrice:"+str.tostring(_lastPrice))
+            if(array.min(_temp) >= _lastPrice)
+                _penNumHasOver := false
+    //print("_endIndex:"+str.tostring(_endIndex)+"\n_startIndex:"+str.tostring(_startIndex)+"\npenType:"+str.tostring(penType)+"\n_penNumHasOver:"+str.tostring(_penNumHasOver))
+    //如果是严格笔的话进行再次判断独立k线是否重合
+    if(_penNumHasOver and penTypeStr == "严笔")
+        if(_pen.direction == -1 )
+            float[] _temp = array.slice(mergeHigh,_startIndex+2,_endIndex-1)
+            float _lastPrice  = array.get(mergeHigh,_startIndex+1)
+            if(array.max(_temp) <= _lastPrice )
+                _penNumHasOver := false
+        else if(_pen.direction == 1)
+            float[] _temp = array.slice(mergeLow,_startIndex+2,_endIndex-1)
+            float _lastPrice  = array.get(mergeLow,_startIndex+1)  
+            if(array.min(_temp) >= _lastPrice)
+                _penNumHasOver := false
+    //特殊情况(顶底比例达到指定值就可以成笔,不用限制k线的数量)     
+    //print("_penNumHasOver:"+str.tostring(_penNumHasOver)+"\np_TopAndBottom_Ratio:"+str.tostring(p_TopAndBottom_Ratio))  
+    if(not _penNumHasOver and p_TopAndBottom_Ratio > 0 )
+        float _num = 0
+        if(_pen.direction == 1)
+            _num := (_pen.high - array.get(mergeLow,_endIndex) )/(_pen.high - _pen.low)
+        if(_pen.direction == -1)
+            _num := (array.get(mergeHigh,_endIndex)  -_pen.low )/(_pen.high - _pen.low)
+        if(_num >= p_TopAndBottom_Ratio/100)
+            _penNumHasOver := true
+    _penNumHasOver
+
+//本方法针对第一笔特殊处理
+createFistPen(_isTopOrBottom,_topOrBottomTime,_topOrBottomPrice) =>
+    //注释太多没必要的，为了变量限制
+    Pen _pen = na
+    //取得当前集合中最低点及位置
+    float _minLowPrice = array.min(mergeLow)
+    int bottomIndex = array.indexof(mergeLow,_minLowPrice) 
+    // int minBottomTime = array.get(mergeTime,bottomIndex)  
+    // int _minBarIndex = array.get(mergeBarIndex,bottomIndex)
+    //取得当前集合中最高点及位置
+    float _maxHighPrice = array.max(mergeHigh)
+    int topIndex = array.indexof(mergeHigh,_maxHighPrice)
+    // int maxTopTime = array.get(mergeTime,topIndex)  
+    // int _maxBarIndex = array.get(mergeBarIndex,topIndex)
+
+
+    bool isEnough =true
+    //顶底分型合并后k线数量
+    int mergeKbarNum = math.abs(topIndex - bottomIndex) + 1 
+    if(mergeKbarNum < penType)
+        isEnough := false
+    // //新笔的话判断中间k线数量是否足够
+    if(penType == -4 and bar_index<5)
+        isEnough := false
+    //print("topIndex:"+str.tostring(topIndex)+"\nbottomIndex:"+str.tostring(bottomIndex)+"\nbar_index:"+str.tostring(bar_index)+"\nisEnough:"+str.tostring(isEnough))
+    //最高顶底之间k线数量>指定数量就可以成笔了
+    if(isEnough)
+        _pen := Pen.new(_maxHighPrice,_minLowPrice
+                                     ,(array.get(mergeTime,topIndex) > array.get(mergeTime,bottomIndex))?array.get(mergeTime,bottomIndex):array.get(mergeTime,topIndex)
+                                     ,(array.get(mergeTime,topIndex) > array.get(mergeTime,bottomIndex))?array.get(mergeTime,topIndex):array.get(mergeTime,bottomIndex)
+                                     ,1
+                                     ,(array.get(mergeTime,topIndex) > array.get(mergeTime,bottomIndex))?1:-1)
+    if(not na(_pen))
+        drawPen(_pen)
+
+    _pen
+
+//如果当前笔需要修正的话进行修正
+penChange(Pen _pen,int _isTopOrBottom,int _topOrBottomTime,float _topOrBottomPrice)=>
+    //获得当前笔方向
+    int _direction = _pen.direction
+    int _endIndex   = array.size(mergeTime) - 1
+    //判断是否成立本笔的修正顶底分型
+    bool _hasSelfTB = false
+    if(_direction == 1 and _isTopOrBottom == 1)
+        //顶分型
+        _hasSelfTB := true
+    if(_direction == -1 and _isTopOrBottom == -1)
+        //底分型
+        _hasSelfTB  := true
+    float _newPrice = float(na)
+    int   _newTime  = int(na)
+    //如果快速成笔模式的话，获得最后一次合并k价值
+    if(isFastToPen  ) //and not _hasSelfTB
+        _newPrice := _direction == 1 ? array.last(mergeHigh) : array.last(mergeLow)
+        _newTime  := array.last(mergeTime) 
+    if(_hasSelfTB)
+        _newPrice := _topOrBottomPrice
+        _newTime  := _topOrBottomTime
+
+    bool _isChange = false
+    if(not na(_newPrice) and not na(_newTime))
+        //修正本笔
+        if(_direction == 1 and _newPrice >= _pen.high)
+            _pen.high    := _newPrice
+            _pen.endTime := _newTime
+            if(array.indexof(ablePen,_pen)<0)
+                drawPen(_pen)
+                _isChange := true
+        else if(_direction == -1 and _newPrice <= _pen.low)
+            _pen.low    := _newPrice
+            _pen.endTime := _newTime
+            if(array.indexof(ablePen,_pen)<0)
+                drawPen(_pen)
+                _isChange := true
+    if(_isChange)
+        delDrawPenOperate(1,_pen)
+
+//判断是否生成下一笔
+//@return 生成的新笔
+penGenerateNextPen(Pen _pen,int _isTopOrBottom)=>
+    Pen _nextPen = na
+    //获得当前笔方向
+    int _direction = _pen.direction
+    //判断下一笔数量是否足够
+    int _startIndex = array.indexof(mergeTime,_pen.endTime)
+    int _endIndex   = array.size(mergeTime) - 2
+    if(_startIndex!=-1 and _endIndex!= -1)
+        //判断下一笔是否出现分型
+        bool _hasNextTB = _isTopOrBottom == -_direction
+        //判断下一笔数量是否满足
+        bool _penNumHasOver = false
+        //满足的话判断是否形成对应分型
+        if(_hasNextTB or isFastToPen) //(isFastToPen and _isTopOrBottom == 0)
+            _penNumHasOver := checkPenNumHasOver(_pen,_isTopOrBottom)
+        //if(array.indexof(ablePen,_pen) != -1 )
+        //print("_hasNextTB:"+str.tostring(_hasNextTB)+"\nisFastToPen:"+str.tostring(isFastToPen)+"\n_isTopOrBottom:"+str.tostring(_isTopOrBottom))
+        //验证顶底分型是否符合条件
+        bool _checkCondition2 =false
+        if(_penNumHasOver)
+            if(isFastToPen and (_isTopOrBottom == 0  or _isTopOrBottom==_direction ))
+                _endIndex := array.size(mergeTime) - 1
+            if(oldPenMode) //老版本笔不考虑顶底 交集关系，只需要顶>底  
+                if(_direction == 1)
+                    //底分型
+                    _checkCondition2 := _pen.high > array.get(mergeHigh,_endIndex) 
+                    //print("********************1:"+str.tostring(_pen.high)+"\n :"+str.tostring(array.get(mergeHigh,_endIndex) ))
+                if(_direction == -1)
+                    //print("******")
+                    //顶分型
+                    _checkCondition2 := array.get(mergeHigh,_endIndex)  > array.get(mergeHigh,array.indexof(mergeTime,_pen.endTime))
+                    //print("********************2:"+str.tostring(array.get(mergeHigh,_endIndex))+"\n :"+str.tostring( array.get(mergeHigh,array.indexof(mergeTime,_pen.endTime)))+"\nhigh:"+str.tostring(_pen.high)+"\nlow:"+str.tostring(_pen.low))
+            else
+                // //处理左包含的顶底区域
+                // if(_direction == 1)
+                //     float[] _temp = array.slice(mergeLow,_startIndex - 1, _startIndex + 2)
+                //     float _fxMinPrice = array.min(_temp)
+                //     //底分型
+                //     _checkCondition2 := _fxMinPrice  >  array.get(mergeLow,_endIndex)
+                //     //print("1_fxMinPrice:"+str.tostring(_fxMinPrice)+"\n array.get(mergeLow,_endIndex):"+str.tostring( array.get(mergeLow,_endIndex))+"\n "+str.tostring(_pen.high)+":"+str.tostring(_pen.low))
+                // if(_direction == -1)
+                //     float[] _temp = array.slice(mergeHigh,_startIndex - 1, _startIndex + 2)
+                //     float _fxMinPrice = array.max(_temp)
+                //     //print("2_fxMinPrice:"+str.tostring(_fxMinPrice)+"\n array.get(mergeHigh,_endIndex)  :"+str.tostring( array.get(mergeHigh,_endIndex))+"\n "+str.tostring(_pen.high)+":"+str.tostring(_pen.low))
+                //     //顶分型
+                //     _checkCondition2 := _fxMinPrice < array.get(mergeHigh,_endIndex)
+                if(_direction == 1)
+                    //底分型
+                    _checkCondition2 := array.get(mergeLow,array.indexof(mergeTime,_pen.endTime))  > array.get(mergeHigh,_endIndex) 
+                if(_direction == -1)
+                    //顶分型
+                    _checkCondition2 := array.get(mergeLow,_endIndex)  > array.get(mergeHigh,array.indexof(mergeTime,_pen.endTime))
+        // if(array.indexof(ablePen,_pen) != -1 ) 
+        //print("_penNumHasOver:"+str.tostring(_penNumHasOver)+"\n_checkCondition2:"+str.tostring(_checkCondition2)+"\n_direction:"+str.tostring(_direction))
+        //满足条件生成新笔
+        if(_checkCondition2)
+            float _nextHigh = _direction == 1?_pen.high:array.get(mergeHigh,_endIndex) 
+            float _nextLow = _direction == 1?array.get(mergeLow,_endIndex ): _pen.low
+            int   _nextEndTime = array.get(mergeTime,_endIndex )
+            //if(array.indexof(ablePen,_pen) != -1 ) 
+                //print("-------------------------------------------------------_nextHigh:"+str.tostring(_nextHigh)+":"+str.tostring(_nextLow)+":"+str.tostring(array.get(mergeHigh,_endIndex))+":"+str.tostring(array.get(mergeHigh,array.size(mergeHigh)-1)))
+            _nextPen := Pen.new( _nextHigh,_nextLow, _pen.endTime,_nextEndTime,1, -_direction)
+            //该笔不是可能成笔的话才立刻进行划线
+            if(array.indexof(ablePen,_pen) == -1 )
+                drawPen(_nextPen)
+                array.clear(ablePen)
+    _nextPen
+//对最后一笔进行拆分
+penSplit(Pen _ablePen,Pen _nextPen)=>
+    //取得最后一笔
+    Pen _lastPen = array.get(pens,array.size(pens) - 1)
+    float _topOrBottomPrice =_nextPen.direction ==1 ? _nextPen.high:_nextPen.low
+    int _topOrBottomTime = _nextPen.endTime
+    bool _isChange = true
+    //debugInfo.debugInfo := ""
+    if(_ablePen.direction == 1 )
+        if(_topOrBottomPrice > _lastPen.low)
+            _isChange := false
+            //array.remove(ablePen,array.indexof(ablePen,_ablePen))
+        if(_isChange)
+            //重新更新最后一笔
+            _lastPen.endTime := _ablePen.startTime
+            _lastPen.low := _ablePen.low
+            drawPen(_lastPen)
+            //添加可能成笔为正式成笔
+            drawPen(_ablePen)
+            //后续一笔
+            drawPen(_nextPen)
+            array.remove(ablePen,array.indexof(ablePen,_ablePen))
+    else if(_ablePen.direction == -1 )
+        //print("++++++++++++++++++++++++++++++++++++++++++++"+str.tostring(_topOrBottomPrice)+":"+str.tostring(_lastPen.high))
+        if(_topOrBottomPrice < _lastPen.high)
+            _isChange := false
+            //array.remove(ablePen,array.indexof(ablePen,_ablePen))
+        if(_isChange)
+            //重新更新最后一笔
+            _lastPen.endTime := _ablePen.startTime
+            _lastPen.high := _ablePen.high
+            drawPen(_lastPen)
+            // //添加可能成笔为正式成笔
+            drawPen(_ablePen)
+            //后续一笔
+            drawPen(_nextPen)
+            array.remove(ablePen,array.indexof(ablePen,_ablePen))
+    //print(debugInfo.debugInfo)
+
+//笔内部的处理逻辑
+penInnerHandler(Pen _pen,_isTopOrBottom,_topOrBottomTime,_topOrBottomPrice)=>
+    //获得当前笔方向
+    int _direction = _pen.direction
+    Pen _nextPen = na
+    //判断是否产生下一笔
+    _nextPen := penGenerateNextPen(_pen,_isTopOrBottom)
+    if(na(_nextPen))
+        //判断是否成立本笔的修正顶底分型
+        penChange(_pen,_isTopOrBottom,_topOrBottomTime,_topOrBottomPrice)
+    //debugInfo.debugInfo +="\n"+str.tostring(array.indexof(ablePen,_pen))+":"+str.tostring(_pen.high)+":"+str.tostring(_pen.low)
+    //如果当前笔是可能成笔中的话，并且产生新笔，进行笔拆分
+    if(array.indexof(ablePen,_pen)>=0 and not na(_nextPen))
+        //print("--------------------------------------------------")
+        penSplit(_pen,_nextPen)
+    _nextPen
+//判断该笔是否左包含
+penLeftContain(Pen _pen) =>
+    bool isLeftContain = false
+    if(array.indexof(mergeTime,_pen.startTime)>=1)
+        int leftBarIndex =array.get(mergeBarIndex , array.indexof(mergeTime,_pen.startTime)-1)
+        int rightBarIndex =array.get(mergeBarIndex , array.indexof(mergeTime,_pen.startTime)+1)
+        //print("direction:"+str.tostring(_pen.direction)+"\nhigh:"+str.tostring(_pen.high)+":"+str.tostring(_pen.low))
+        // if(leftBarIndex > bar_index)
+        //     runtime.error("leftBarIndex"+str.tostring(leftBarIndex))
+        if(bar_index-leftBarIndex < 1000)
+            if(_pen.direction == 1 and _pen.high < math.max(high[bar_index-leftBarIndex],high[bar_index-rightBarIndex]))
+                //print(str.tostring(high[bar_index-leftBarIndex])+":"+str.tostring(high[bar_index-rightBarIndex])+":"+str.tostring(_pen.high))
+                isLeftContain := true
+            if(_pen.direction == -1 and _pen.low > math.min(low[bar_index-leftBarIndex],high[bar_index-rightBarIndex]))
+                isLeftContain := true
+    if(oldPenMode)
+        isLeftContain := false
+    isLeftContain
+//处理整个成笔逻辑
+penHandler(_isTopOrBottom,_topOrBottomTime,_topOrBottomPrice)=>
+    //如果当前没有笔的话生成第一个笔
+    if(array.size(pens) <= 0)
+        Pen _firstPen = createFistPen(_isTopOrBottom,_topOrBottomTime,_topOrBottomPrice)
+    else
+        //取得最后的笔
+        Pen _lastPen =  array.get(pens,array.size(pens)-1)
+        //上一个同方向笔
+        Pen _prePen = na
+        if(array.size(pens) >= 2)
+            _prePen := array.get(pens,array.size(pens)-2)
+        //生成的新笔//如果存可能成笔先处理可能成笔的高低点
+        Pen _nextPen = (array.size(ablePen)>0 ) ? penInnerHandler(array.get(ablePen,0),_isTopOrBottom,_topOrBottomTime,_topOrBottomPrice) : na
+        //处理当前进行中的笔
+        if(na(_nextPen))
+            _nextPen := penInnerHandler(_lastPen,_isTopOrBottom,_topOrBottomTime,_topOrBottomPrice)
+        //修正笔(前两笔)
+        if(na(_nextPen) and not na(_prePen) and _isTopOrBottom != 0)
+            //print("_lastPen.low:"+str.tostring(_lastPen.low)+"\n_prePen.low:"+str.tostring(_prePen.low))
+            //最后笔和前一笔比例达到61.8的话不进行修复
+            //bool reboundRadio = (_lastPen.high - _lastPen.low)/(_prePen.high-_prePen.low)*100 < 61.8
+            if(_prePen.direction == 1  and _lastPen.low> _prePen.low and _isTopOrBottom == 1 and _topOrBottomPrice > _prePen.high )
+                //将删除的笔放入可能成笔中
+                array.clear(ablePen)
+                if(not penLeftContain(_lastPen))
+                    array.push(ablePen,_lastPen)
+                _prePen.high := _topOrBottomPrice
+                _prePen.endTime :=  _topOrBottomTime
+                delPen(_lastPen)
+                drawPen(_prePen)
+            else if(_prePen.direction == -1  and _lastPen.high < _prePen.high  and _isTopOrBottom == -1 and _topOrBottomPrice < _prePen.low)
+                //将删除的笔放入可能成笔中
+                array.clear(ablePen)
+                if(not penLeftContain(_lastPen))
+                    array.push(ablePen,_lastPen)
+                _prePen.low := _topOrBottomPrice
+                _prePen.endTime :=  _topOrBottomTime
+                delPen(_lastPen)
+                drawPen(_prePen) 
+    if(array.size(pens)>0)
+        drawRunningPen(array.get(pens,array.size(pens)-1))
+
+//绘制强势分型
+drawPowerfulPeek(Pen _pen,PeekEvent _peekEvent)=>
+    // float[]  peakTypes= array.new<float>(na)
+    // array.push(peakTypes,0)
+    // array.push(peakTypes,0)
+    // array.push(peakTypes,0)
+    // if(not na(_pen) and not na(_peekEvent))
+    //     if(_pen.direction == _peekEvent.isTopOrBottom)
+    //         //1:如果有背驰的支持最高权限(该笔对应的线段的背驰)
+    //         if(array.size(segments) > 0)
+    //             Segment _lastSegment = array.last(segments)
+    //             if(array.indexof(pens,_pen) == _lastSegment.endPenIndex )
+    //                 //取得该笔之前的极值
+    //                 float _peekMacdValue = 0
+    //                 for i = _lastSegment.startPenIndex to _lastSegment.endPenIndex
+    //                     if(i == array.indexof(pens,_pen))
+    //                         continue
+    //                     Pen _tempPen = array.get(pens,i)
+    //                     if(_lastSegment.direction == 1 and array.max(_tempPen.area) >0)
+    //                         _peekMacdValue:=_peekMacdValue==0?array.max(_tempPen.area):array.max(_tempPen.area)>_peekMacdValue?array.max(_tempPen.area):_peekMacdValue
+    //                     else if(_lastSegment.direction == -1 and  array.min(_tempPen.area) <0)
+    //                         _peekMacdValue:=_peekMacdValue==0?array.min(_tempPen.area):array.min(_tempPen.area)<_peekMacdValue?array.min(_tempPen.area):_peekMacdValue   
+    //                 //判断是否背驰
+    //                 int      _penBarIndex = array.get(mergeBarIndex,array.indexof(mergeTime,_pen.endTime))
+    //                 float    _penMacd     = array.get(macdHist,_penBarIndex)
+    //                 if(_lastSegment.direction == 1 and _penMacd <= _peekMacdValue)
+    //                     array.set(peakTypes,0,1)
+    //                 else if(_lastSegment.direction == -1 and _penMacd >= _peekMacdValue)
+    //                     array.set(peakTypes,0,1)
+    //         //取得三根k线信息
+    //         int   _barIndex = array.indexof(mergeBarIndex,_peekEvent.peekBarIndex)
+    //         float _open1  = open[(bar_index -array.get(mergeBarIndex,_barIndex -1))]
+    //         float _close1 = close[(bar_index - array.get(mergeBarIndex,_barIndex - 1))]
+    //         float _high1  = high[(bar_index - array.get(mergeBarIndex,_barIndex - 1))]
+    //         float _low1   = low[(bar_index - array.get(mergeBarIndex,_barIndex -1))]
+
+    //         float _open2  = open[(bar_index - _peekEvent.peekBarIndex)]
+    //         float _close2 = close[(bar_index - _peekEvent.peekBarIndex)]
+    //         float _high2  = high[(bar_index - _peekEvent.peekBarIndex)]
+    //         float _low2   = low[(bar_index - _peekEvent.peekBarIndex)]
+
+    //         float _open3  = open[(bar_index     - array.get(mergeBarIndex,_barIndex+1) )]
+    //         float _close3 = close[(bar_index    - array.get(mergeBarIndex,_barIndex+1)  )]
+    //         float _high3  = high[(bar_index     - array.get(mergeBarIndex,_barIndex+1) )]
+    //         float _low3   = low[(bar_index      - array.get(mergeBarIndex,_barIndex+1) )]
+    //         //2:如果第二根是长上影(50% )或者直接长阴(70) 第三根不能以阳线收在第二根一半以上
+    //         float _hatch  =  ((_open2 > _close2) ? _high2 - _open2 : _high2 - _low2)/math.abs(_high2 - _low2)
+    //         float _lengBar = math.abs(_open2 - _low2)/ math.abs(_high2 - _low2)
+    //         _lengBar := (_pen.direction == 1 and _open2 > _close2)?0:(_pen.direction == -1 and _open2 < _close2)?0:_lengBar
+    //         if(_hatch>0.5 or  _lengBar > 0.7)
+    //             if(_close3 < (_high2 - _low2)/2 + _low2)
+    //                 array.set(peakTypes,1,1)
+    //         //3:第三根K线跌破第一根k线低点,并且不能收盘在第一根区间1半以上(较强杀伤力)
+    //         if(_low3 <= _low1 and _close3 < (_high1 - _low1)/2 + _low1 )
+    //             array.set(peakTypes,2,1)
+    //         //4:排除条件1: 出现k线数量超过5根
+    //         if(array.get(peakTypes,0)<=0 and array.sum(peakTypes) > 0 and array.get(mergeBarIndex,_barIndex+1) -array.get(mergeBarIndex,_barIndex-1)>=4 )
+    //             array.set(peakTypes,0,0),array.set(peakTypes,1,0),array.set(peakTypes,2,0)
+    //         //5:排除条件2: 该笔内部没有结构
+    //         if(array.get(peakTypes,0)<=0 and array.sum(peakTypes) > 0)
+    //             int _penStartIndex = array.indexof(mergeTime,_pen.startTime)
+    //             int _penEndIndex = array.indexof(mergeTime,_pen.endTime)
+    //             _peeks = array.slice(peakIndexs,array.indexof(mergeTime,_pen.startTime),array.indexof(mergeTime,_pen.endTime))
+    //             if(array.range(_peeks)<2)
+    //                 array.set(peakTypes,0,0),array.set(peakTypes,1,0),array.set(peakTypes,2,0)
+    //         //如果存在强势分型的话进行绘制
+    //         if(array.sum(peakTypes) > 0 )
+    //             float _maxHigh = math.max(_high1,_high2,_high3)
+    //             float _maxLow  = math.min(_low1,_low2,_low3)
+    //             //print("_maxHigh:"+str.tostring(_maxHigh)+"\n_maxLow:"+str.tostring(_maxLow)+"\n"+str.tostring(_high1)+":"+str.tostring(_low1)+"\n"+str.tostring(_high2)+":"+str.tostring(_low2)+"\n"+str.tostring(_high3)+":"+str.tostring(_low3))
+    //             int _showLast = bar_index -array.indexof(mergeBarIndex,_peekEvent.peekBarIndex) - 1
+    //             string tooltip = str.tostring(array.get(peakTypes,0))+"-"+str.tostring(array.get(peakTypes,1))+"-"+str.tostring(array.get(peakTypes,2))
+    //             box.new(array.get(mergeBarIndex,_barIndex-1),_maxHigh,array.get(mergeBarIndex,_barIndex+1),_maxLow
+    //                      ,border_color=_pen.direction==1?color.red:color.green,bgcolor=color.rgb(255, 255, 255, 100),text=tooltip)
+    true
+
+//#endregion        
+//判断是否需要处理，如果设置了k线分析数量
+bool isCyc = true
+if(p_max_cyc_bar!=0 and bar_index < last_bar_index - p_max_cyc_bar)
+    isCyc := false
+Pen _realLastPen = na
+//保存每一个k线的macd面积
+array.push(macdHist,histLine)
+//初始化报警相关设置
+initAlertFlag()
+//系统启动是首次初始化级别信息
+initGrade()
+//合并顶底分型
+[isTopOrBottom,topOrBottomTime,topOrBottomPrice] = mergeBarAndFindTopAndBottom(isCyc)
+// //展示处理合并K线
+float _mergeOpen = na
+if(isShowMergeBar and array.size(mergeHigh)>0)
+    _mergeOpen := array.last(mergeHigh)
+plotcandle(_mergeOpen,array.size(mergeHigh)>0?array.last(mergeHigh):na,  
+     array.size(mergeLow)>0?array.last(mergeLow):na,
+     array.size(mergeLow)>0?array.last(mergeLow):na,
+     color = color.rgb(255, 255, 255, 100),  
+     wickcolor = color.black)
+if(isCyc)
+    //table.cell(suggestInfo,0,3,"wx:fanjianqiang2007",text_size = size.large)
+    //处理笔的业务逻辑
+    penHandler(isTopOrBottom,topOrBottomTime,topOrBottomPrice)
+    if(array.size(pens) > 0 )
+        _realLastPen := array.last(pens)
+    //提前绘制中枢
+    if(p_isBeforeDrawPivot)
+        beforeDrawPivot(1)
+    if(p_isBeforeDrawCurrentPivot)
+        beforeDrawPivot(2)
+    //绘制高级别线段及本级别中枢
+    // if(array.size(segments)>0 and isTopOrBottom!=0)
+    //     createSegment(2)
+    //处理顶底事件(此处有问题，当向上笔最后一个出现底分型也执行一次，提前显示了买卖点)
+    if(array.size(peekEvents)>0 and not na(_realLastPen) )
+        //绘制顶底分型
+        if(_realLastPen.direction ==-1)
+            setTopBottomLabel(_realLastPen,_realLastPen.endTime,_realLastPen.low,-1)
+        else
+            setTopBottomLabel(_realLastPen,_realLastPen.endTime,_realLastPen.high,1)
+        //显示强势分型
+        if(isPowerfulPeek)
+            drawPowerfulPeek(_realLastPen,array.last(peekEvents))
+        //提示买卖点
+        if(_realLastPen.direction == (array.last(peekEvents)).isTopOrBottom )
+            penOperateHandler(1)
+            penOperateHandler(2)
+    if(array.size(trendEvents) > 0)
+        createSegment(2)
+        array.clear(trendEvents)
+    //特征序列
+    //if(isTopOrBottom != 0)
+    drawFeature(1)
+    //后续清理工作
+    //清理事件: 事件在上面已经使用，直接清理
+    array.clear(peekEvents)
+
+//#region 均线系统
+ma1 = ma(ma1_source, ma1_length, ma1_type)
+plot(show_ma1 ? ma1 : na, color = ma1_color, title="MA1",linewidth = ma1__width)
+ma2 = ma(ma2_source, ma2_length, ma2_type)
+plot(show_ma2 ? ma2 : na, color = ma2_color, title="MA2",linewidth = ma2__width)
+ma3 = ma(ma3_source, ma3_length, ma3_type)
+plot(show_ma3 ? ma3 : na, color = ma3_color, title="MA3",linewidth = ma3__width)
+ma4 = ma(ma4_source, ma4_length, ma4_type)
+plot(show_ma4 ? ma4 : na, color = ma4_color, title="MA4",linewidth = ma4__width)
+ma5 = ma(ma5_source, ma5_length, ma5_type)
+plot(show_ma5 ? ma5 : na, color = ma5_color, title="MA5",linewidth = ma5__width)
+ma6 = ma(ma6_source, ma6_length, ma6_type)
+plot(show_ma6 ? ma6 : na, color = ma6_color, title="MA6",linewidth = ma6__width)
+ma7 = ma(ma7_source, ma7_length, ma7_type)
+plot(show_ma7 ? ma7 : na, color = ma7_color, title="ma7",linewidth = ma7__width)
+ma8 = ma(ma8_source, ma8_length, ma8_type)
+plot(show_ma8 ? ma8 : na, color = ma8_color, title="ma8",linewidth = ma8__width)  
+
